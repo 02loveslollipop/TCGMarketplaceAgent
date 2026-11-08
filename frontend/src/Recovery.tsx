@@ -1,0 +1,30 @@
+import {useEffect,useState} from 'react';
+import {Alert,Button,Checkbox,ExpandableSection,FormField,Header,Input,SpaceBetween} from '@cloudscape-design/components';
+import {api} from './client';
+
+export function RecoveryCodes({codes,onFinish}:{codes:string[];onFinish:()=>void}) {
+  const [saved,setSaved]=useState(false);
+  function download(){const url=URL.createObjectURL(new Blob([codes.join('\n')+'\n'],{type:'text/plain'}));const anchor=document.createElement('a');anchor.href=url;anchor.download='pokemon-tcg-recovery-codes.txt';anchor.click();URL.revokeObjectURL(url);}
+  return <SpaceBetween size="l"><Header variant="h2">Save your recovery codes</Header><Alert type="warning">These codes are shown once. Store them privately. Each code replaces your second factor once after your password.</Alert>
+    <div data-testid="recovery-codes-secret" aria-label="Recovery codes"><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{codes.join('\n')}</pre></div>
+    <Button data-testid="download-recovery-codes" onClick={download}>Download recovery codes</Button>
+    <Checkbox data-testid="recovery-saved-checkbox" checked={saved} onChange={({detail})=>setSaved(detail.checked)}>I have saved these recovery codes</Checkbox>
+    <Button data-testid="recovery-finish-button" variant="primary" disabled={!saved} onClick={onFinish}>Finish setup and sign in</Button></SpaceBetween>;
+}
+
+export function RecoverySettings({token,onFinish}:{token:string;onFinish:()=>void}) {
+  const [remaining,setRemaining]=useState<number>(),[password,setPassword]=useState(''),[codes,setCodes]=useState<string[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  useEffect(()=>{void api<{remaining:number}>('/api/auth/recovery/status',token).then(value=>setRemaining(value.remaining)).catch(error=>setError(error.message));},[token]);
+  async function generate(){if(busy||!password)return;setBusy(true);setError('');try{const result=await api<{recovery_codes:string[]}>('/api/auth/recovery/regenerate',token,{method:'POST',body:JSON.stringify({password})});setCodes(result.recovery_codes);}catch(error){setError((error as Error).message);}finally{setPassword('');setBusy(false);}}
+  return <ExpandableSection headerText="Recovery codes">{codes.length?<RecoveryCodes codes={codes} onFinish={()=>{setCodes([]);onFinish();}}/>:<SpaceBetween size="m">
+    <Alert type="info">{remaining===undefined?'Checking recovery codes…':`${remaining} recovery codes remaining.`} Generating a new set invalidates all previous codes and signs you out.</Alert>
+    <FormField label="Current password"><Input data-testid="recovery-current-password" type="password" autoComplete="current-password" value={password} disabled={busy} onChange={({detail})=>setPassword(detail.value)}/></FormField>
+    <Button data-testid="recovery-regenerate-button" loading={busy} disabled={busy||!password} onClick={()=>void generate()}>Generate new recovery codes</Button>
+    {error&&<Alert type="error">{error}</Alert>}</SpaceBetween>}</ExpandableSection>;
+}
+
+export function RecoveryLogin({challengeToken,onAuthenticated}:{challengeToken:string;onAuthenticated:(result:{access_token:string})=>Promise<void>}) {
+  const [code,setCode]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  async function submit(){if(busy||!code)return;setBusy(true);setError('');try{await onAuthenticated(await api('/api/auth/recovery/challenge','',{method:'POST',body:JSON.stringify({challenge_token:challengeToken,code})}));}catch(error){setError((error as Error).message);}finally{setCode('');setBusy(false);}}
+  return <ExpandableSection headerText="Use a recovery code"><SpaceBetween size="m"><FormField label="Recovery code"><Input data-testid="recovery-login-code" autoComplete="off" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField><Button data-testid="recovery-login-button" formAction="none" disabled={busy||!code} loading={busy} onClick={()=>void submit()}>Use recovery code</Button>{error&&<Alert type="error">{error}</Alert>}</SpaceBetween></ExpandableSection>;
+}

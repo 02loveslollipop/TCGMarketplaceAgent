@@ -1,0 +1,91 @@
+import {useEffect,useRef,useState} from 'react';
+import {Alert,Box,Button,ExpandableSection,FormField,Input,SpaceBetween,Table} from '@cloudscape-design/components';
+import {startAuthentication,startRegistration,WebAuthnAbortService} from '@simplewebauthn/browser';
+import type {PublicKeyCredentialCreationOptionsJSON,PublicKeyCredentialRequestOptionsJSON} from '@simplewebauthn/browser';
+import {api} from './client';
+
+type AccessToken={access_token:string;token_type:string;expires_in:number};
+interface Credential {id:string;name:string;created_at:string;device_type:string;backed_up:boolean}
+
+function ceremonyError(error:unknown):string {
+  const problem=error as {name?:string;code?:string;message?:string};
+  if(problem.name==='NotAllowedError'||problem.name==='AbortError'||problem.code?.includes('ABORT'))return 'Authenticator operation was cancelled or timed out. You can try again.';
+  if(problem.name==='InvalidStateError')return 'This authenticator may already be registered. Choose another authenticator and try again.';
+  if(problem.name==='WebAuthnError'||problem.name==='NotSupportedError')return 'The authenticator could not complete verification. Check your browser or authenticator and try again.';
+  return problem.message||'Authenticator operation failed. Please try again.';
+}
+
+export function WebAuthnLogin({challengeToken,disabled,onAuthenticated,onBusy,onRestart}:{challengeToken:string;disabled:boolean;onAuthenticated:(result:AccessToken)=>Promise<void>;onBusy:(busy:boolean)=>void;onRestart:()=>void}) {
+  const [busy,setBusy]=useState(false),[error,setError]=useState('');
+  const ceremony=useRef<string|null>(null);
+  const cancelled=useRef(false);
+  useEffect(()=>()=>WebAuthnAbortService.cancelCeremony(),[]);
+  async function cancelServer() {
+    if(ceremony.current) {
+      await api(`/api/auth/webauthn/challenges/${ceremony.current}/cancel`,'',{method:'POST',body:JSON.stringify({challenge_token:challengeToken})});
+      ceremony.current=null;
+    }
+  }
+  async function authenticate() {
+    if(busy||disabled)return;
+    cancelled.current=false;
+    setBusy(true);onBusy(true);setError('');
+    try {
+      const request=await api<{challenge_id:string;options:PublicKeyCredentialRequestOptionsJSON}>('/api/auth/webauthn/authentication/options','',{method:'POST',body:JSON.stringify({challenge_token:challengeToken})});
+      ceremony.current=request.challenge_id;
+      if(cancelled.current)throw new DOMException('Cancelled','AbortError');
+      const credential=await startAuthentication({optionsJSON:request.options});
+      if(cancelled.current)throw new DOMException('Cancelled','AbortError');
+      const result=await api<AccessToken>('/api/auth/webauthn/authentication/verify','',{method:'POST',body:JSON.stringify({challenge_token:challengeToken,challenge_id:request.challenge_id,credential})});
+      ceremony.current=null;
+      await onAuthenticated(result);
+    }catch(error){setError(ceremonyError(error));try{await cancelServer();}catch{setError('The authenticator attempt could not be completed or cancelled. Sign in again to retry.');}}
+    finally{setBusy(false);onBusy(false);}
+  }
+  function cancel(){cancelled.current=true;WebAuthnAbortService.cancelCeremony();}
+  return <SpaceBetween size="m">
+    <Box>Complete the second step with an enrolled passkey or security key. Your password has already been verified.</Box>
+    {error&&<Alert type="error">{error}</Alert>}
+    <Button data-testid="webauthn-login-button" formAction="none" variant="primary" disabled={busy||disabled} loading={busy} onClick={()=>void authenticate()}>Use passkey or security key</Button>
+    {busy&&<Button data-testid="webauthn-login-cancel-button" formAction="none" onClick={cancel}>Cancel authenticator</Button>}
+    {!busy&&<Button data-testid="webauthn-login-restart-button" formAction="none" onClick={onRestart}>Start sign-in again</Button>}
+  </SpaceBetween>;
+}
+
+export function WebAuthnSettings({token,onChange}:{token:string;onChange:()=>void}) {
+  const [credentials,setCredentials]=useState<Credential[]>([]),[name,setName]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const ceremony=useRef<string|null>(null);
+  const cancelled=useRef(false);
+  useEffect(()=>{void api<Credential[]>('/api/auth/webauthn/credentials',token).then(setCredentials).catch(error=>setError(error.message));return()=>WebAuthnAbortService.cancelCeremony();},[token]);
+  async function enroll() {
+    if(busy||!name.trim())return;
+    cancelled.current=false;
+    setBusy(true);setError('');
+    try {
+      const request=await api<{challenge_id:string;options:PublicKeyCredentialCreationOptionsJSON}>('/api/auth/webauthn/registration/options',token,{method:'POST',body:JSON.stringify({name:name.trim()})});
+      ceremony.current=request.challenge_id;
+      if(cancelled.current)throw new DOMException('Cancelled','AbortError');
+      const credential=await startRegistration({optionsJSON:request.options});
+      if(cancelled.current)throw new DOMException('Cancelled','AbortError');
+      await api('/api/auth/webauthn/registration/verify',token,{method:'POST',body:JSON.stringify({challenge_id:request.challenge_id,credential})});
+      ceremony.current=null;onChange();
+    }catch(error){setError(ceremonyError(error));if(ceremony.current){try{await api(`/api/auth/webauthn/challenges/${ceremony.current}/cancel`,token,{method:'POST',body:'{}'});}catch{setError('Registration could not be completed or cancelled. Sign in again to retry.');}ceremony.current=null;}}
+    finally{setBusy(false);}
+  }
+  async function remove(id:string) {
+    setBusy(true);setError('');
+    try{await api(`/api/auth/webauthn/credentials/${id}`,token,{method:'DELETE'});onChange();}catch(error){setError((error as Error).message);}finally{setBusy(false);}
+  }
+  return <ExpandableSection data-testid="webauthn-settings-section" headerText="Passkeys and security keys"><SpaceBetween size="m">
+    <Box>Use your browser’s chooser to add a password-manager passkey or a physical security key. You will still enter your password before using it to sign in. Adding or removing an authenticator requires signing in again.</Box>
+    {error&&<Alert type="error">{error}</Alert>}
+    <Table data-testid="webauthn-credentials-table" items={credentials} empty={<Box>No passkeys or security keys enrolled.</Box>} columnDefinitions={[
+      {id:'name',header:'Authenticator',cell:credential=>credential.name},
+      {id:'created',header:'Enrolled',cell:credential=>new Date(credential.created_at).toLocaleString()},
+      {id:'remove',header:'Manage',cell:credential=><Button data-testid="webauthn-remove-button" disabled={busy} onClick={()=>void remove(credential.id)}>Remove {credential.name}</Button>}
+    ]}/>
+    <FormField label="Authenticator name" description="For example, Google Password Manager or Physical security key."><Input data-testid="webauthn-name-input" value={name} disabled={busy} onChange={({detail})=>setName(detail.value)}/></FormField>
+    <Button data-testid="webauthn-enroll-button" disabled={busy||!name.trim()} loading={busy} onClick={()=>void enroll()}>Add passkey or security key</Button>
+    {busy&&<Button data-testid="webauthn-enroll-cancel-button" onClick={()=>{cancelled.current=true;WebAuthnAbortService.cancelCeremony();}}>Cancel authenticator</Button>}
+  </SpaceBetween></ExpandableSection>;
+}
