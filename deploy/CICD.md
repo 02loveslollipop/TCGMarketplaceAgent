@@ -1,15 +1,12 @@
 # CI/CD for the testing deployment
 
-The workflow tests Python, the React apps and the Heroku image on pushes to
-`main` and pull requests. Deployment is an explicit Actions `workflow_dispatch`
-on `main` with `deploy` selected. A backend image is built for
-that deployment run after CI tests the image build, then released to auth, chat and admin in sequence; each release takes
-effect immediately, so this is not an atomic five-service rollout. Pages builds
-both frontends and deploys after all backend releases succeed. A failed or
-partially completed release needs investigation and an explicit rerun or rollback.
-
-The workflow is preparation; it does not create provider resources or configure
-DNS and no service is deployed by merely pushing the workflow.
+The Test workflow runs Python, frontend and container checks on pushes to
+`main`, pull requests, and when called by a deployment. Deploy Heroku and Deploy
+Cloudflare Pages are separate manual workflows on `main`; each invokes the Test
+workflow for the same commit before deploying. Deploy Heroku releases auth, chat,
+and admin sequentially and scales each to one Eco web dyno. Deploy Cloudflare
+Pages builds and uploads both frontends. The deployments are not atomic; a failed
+or partially completed release needs investigation and an explicit rerun or rollback.
 
 ## One-time provider setup
 
@@ -22,7 +19,7 @@ DNS and no service is deployed by merely pushing the workflow.
    projects cannot later be converted to Git integration.
 3. Add `HEROKU_API_KEY` and `CLOUDFLARE_API_TOKEN` as GitHub `testing`
    environment secrets. The Cloudflare token needs Account / Cloudflare Pages /
-   Edit for the 02Labs account. The Heroku direct authorization uses read/write
+   Edit for the 02Labs account. The Heroku direct authorization uses identity/read/write
    scope across the owner's apps; it cannot be limited to just these apps with
    that personal scope. Treat it accordingly, and revoke it when no longer needed.
    The local `.env` is not uploaded to GitHub Actions.
@@ -31,8 +28,8 @@ DNS and no service is deployed by merely pushing the workflow.
    the Heroku endpoints and enable ACM per app (`heroku certs:auto:enable`).
    Pages custom domains are added to their Pages projects and use Pages-managed
    certificates. Confirm DNS and certificate status for each actual hostname.
-5. After everything is configured, use Actions → Test and deploy → Run workflow,
-   select `main` and enable `deploy`. Check Heroku releases, health endpoints,
+5. After everything is configured, run Actions → Deploy Heroku, followed by
+   Actions → Deploy Cloudflare Pages, selecting `main` for each. Check Heroku releases, health endpoints,
    certificates and both browser flows. A green CI run does not replace those
    end-to-end checks.
 

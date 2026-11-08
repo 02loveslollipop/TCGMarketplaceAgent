@@ -1,0 +1,45 @@
+name: Deploy Heroku
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deploy-testing
+  cancel-in-progress: false
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+  deploy-heroku:
+    if: github.ref == 'refs/heads/main'
+    needs: [test]
+    runs-on: ubuntu-latest
+    environment: testing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install Heroku CLI
+        run: npm install --global heroku
+      - name: Build image
+        run: docker build -f deploy/heroku.Dockerfile -t tcg-agent:${{ github.sha }} .
+      - name: Authenticate to Heroku registry
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: printf '%s' "$HEROKU_API_KEY" | docker login --username _ --password-stdin registry.heroku.com
+      - name: Push and release services
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          AUTH_APP: ${{ vars.HEROKU_AUTH_APP }}
+          ADMIN_APP: ${{ vars.HEROKU_ADMIN_APP }}
+          CHAT_APP: ${{ vars.HEROKU_CHAT_APP }}
+          IMAGE: tcg-agent:${{ github.sha }}
+        run: |
+          set -eu
+          for app in "$AUTH_APP" "$CHAT_APP" "$ADMIN_APP"; do
+            test -n "$app"
+            docker tag "$IMAGE" "registry.heroku.com/$app/web"
+            docker push "registry.heroku.com/$app/web"
+            heroku container:release web --app "$app"
+            heroku ps:scale web=1:eco --app "$app"
+          done

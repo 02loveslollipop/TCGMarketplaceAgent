@@ -1,0 +1,52 @@
+name: Deploy Cloudflare Pages
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: deploy-testing
+  cancel-in-progress: false
+jobs:
+  test:
+    uses: ./.github/workflows/test.yml
+  deploy-pages:
+    if: github.ref == 'refs/heads/main'
+    needs: [test]
+    runs-on: ubuntu-latest
+    environment: testing
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build both Pages sites
+        working-directory: frontend
+        env:
+          VITE_AUTH_URL: https://api.auth.tcg-marketplace.02labs.me
+          VITE_ADMIN_API_URL: https://api.admin.tcg-marketplace.02labs.me
+          VITE_CHAT_API_URL: https://api.chat.tcg-marketplace.02labs.me
+          VITE_CHAT_WEB_URL: https://chat.tcg-marketplace.02labs.me
+          VITE_ADMIN_WEB_URL: https://admin.tcg-marketplace.02labs.me
+        run: |
+          npm ci
+          npm run build
+          cp -a dist dist-admin
+          cp dist/admin/index.html dist-admin/index.html
+          rm -rf dist-admin/admin dist/admin
+      - name: Deploy chat
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy frontend/dist --project-name=${{ vars.CLOUDFLARE_CHAT_PROJECT }} --branch=main
+      - name: Deploy admin
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy frontend/dist-admin --project-name=${{ vars.CLOUDFLARE_ADMIN_PROJECT }} --branch=main
