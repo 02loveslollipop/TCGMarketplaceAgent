@@ -1,0 +1,12 @@
+.env
+.runtime
+.venv
+.git
+.codex
+.agents
+aidlc
+frontend/node_modules
+frontend/dist
+output
+__pycache__
+.pytest_cache
