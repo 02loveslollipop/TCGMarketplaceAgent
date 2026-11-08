@@ -1,0 +1,337 @@
+{
+  "retrieved_at": "2026-11-06",
+  "method": "Apify MCP fetch_actor_details; no Actor run",
+  "warning": "Output schemas are inferred by Apify from successful runs; no actual dataset was fetched or verified.",
+  "actors": [
+    {
+      "actor": "devcake/tcgplayer-data-scraper",
+      "readme": "## TCGPlayer Scraper\n\nA web scraper for TCGPlayer that automates bulk extraction of trading card data and market intelligence: real-time market prices (market value, median, lowest listing, lowest including shipping), seller listings with ratings and program badges, product metadata (set, set code, rarity, card number, printing type, condition, language), images and direct product links, and optional enrichment with historical sales transactions and aggregated price points by printing type. Technical capabilities include concurrent parallel scraping with full pagination (multiple pages, up to dozens/hundreds of pages per query), multiple sort options, and TLS fingerprinting bypass via Chrome impersonation for reliable access to public search endpoints. Outputs are structured product records plus arrays of seller listings and optional sales-history summaries and price trend aggregates; records include metadata tags for query, page, sort, timestamp, and scraper version. Supported categories cover Pokemon, Magic: The Gathering, Yu-Gi-Oh!, sports cards, and other TCGs.\n\n## Use cases\n\n- Card search and cross-store comparison across TCGPlayer listings  \n- Price tracking and market trend analysis for trading cards  \n- Arbitrage research to identify underpriced listings including shipping costs  \n- Inventory management and repricing by pulling current pricing and listing data  \n- Market research across sets, rarities, and printings for dataset building or modeling  \n- Collectors locating best deals with true total cost (price + shipping)",
+      "inputSchema": {
+        "title": "TCGPlayer Product Scraper",
+        "type": "object",
+        "schemaVersion": 1,
+        "description": "Scrape trading card data from TCGPlayer.",
+        "properties": {
+          "queries": {
+            "title": "Search Queries",
+            "description": "List of search queries to scrape. Pagination settings (startPage, pageCount) apply to EACH query.",
+            "type": "array",
+            "prefill": [
+              "pokemon cards"
+            ]
+          },
+          "sortOption": {
+            "title": "Sort Option",
+            "description": "How to sort the results",
+            "type": "string",
+            "enum": [
+              "Best Match",
+              "Best Selling",
+              "A-Z",
+              "Price: High to Low",
+              "Price: Low to High"
+            ],
+            "default": "Best Match"
+          },
+          "startPage": {
+            "title": "Start Page",
+            "description": "Page number to start scraping from (1-based). Applied to each query independently.",
+            "type": "integer",
+            "default": 1
+          },
+          "pageCount": {
+            "title": "Number of Pages (50 products/page)",
+            "description": "Pages to scrape PER QUERY. Each page contains 50 products. E.g., 3 queries x 2 pages = 300 products total.",
+            "type": "integer",
+            "default": 3
+          },
+          "enrichData": {
+            "title": "Enrich Product Data",
+            "description": "Fetch additional product details (actual sales, price points). Makes 2 extra API calls per product.",
+            "type": "boolean",
+            "default": true
+          }
+        },
+        "required": [
+          "queries"
+        ]
+      },
+      "outputSchema": {
+        "listings": [
+          {
+            "sellerPrograms": [
+              "string"
+            ],
+            "directSeller": "boolean",
+            "goldSeller": "boolean",
+            "verifiedSeller": "boolean",
+            "listingId": "number",
+            "price": "number",
+            "quantity": "number",
+            "sellerRating": "number",
+            "shippingPrice": "number",
+            "totalPrice": "number",
+            "condition": "string",
+            "language": "string",
+            "printing": "string",
+            "sellerId": "string",
+            "sellerKey": "string",
+            "sellerName": "string",
+            "sellerSales": "string"
+          }
+        ],
+        "_enriched": "boolean",
+        "condition": "null",
+        "lowestPrice": "null | number",
+        "lowestPriceWithShipping": "null | number",
+        "marketPrice": "null | number",
+        "medianPrice": "null | number",
+        "number": "null",
+        "rarity": "null",
+        "rarityName": "null | string",
+        "_scrapedPage": "number",
+        "productId": "number",
+        "totalListings": "number",
+        "_enrichment": {
+          "pricePoints": {
+            "normal": {
+              "listedMedian": "number",
+              "marketPrice": "number"
+            },
+            "foil": {
+              "listedMedian": "number",
+              "marketPrice": "number"
+            }
+          },
+          "sales": {
+            "recentSales": [
+              {
+                "price": "number",
+                "quantity": "number",
+                "shipping": "number",
+                "total": "number",
+                "condition": "string",
+                "date": "string",
+                "variant": "string"
+              }
+            ],
+            "avgPrice": "null | number",
+            "lastSaleDate": "null | string",
+            "priceRange": "null | {...}",
+            "totalSales": "number"
+          }
+        },
+        "_query": "string",
+        "_scrapedAt": "string",
+        "_scraperVersion": "string",
+        "_sortOption": "string",
+        "imageUrl": "string",
+        "productName": "string",
+        "productUrlName": "string",
+        "setCode": "string",
+        "setName": "string",
+        "url": "string",
+        "customAttributes": {
+          "cardType": [
+            "string"
+          ],
+          "energyType": [
+            "string"
+          ],
+          "attack1": "string",
+          "hp": "string",
+          "resistance": "string",
+          "retreatCost": "string",
+          "stage": "string",
+          "weakness": "string"
+        }
+      }
+    },
+    {
+      "actor": "phantom_coder/cardmarket-listings-scraper",
+      "readme": "## Cardmarket listings scraper\n\nA Cardmarket-focused web scraper that extracts individual seller listings from product pages or seller offers pages and returns one record per offer containing card identification, seller identity, condition grade, language, quantity, asking price in EUR plus a USD conversion using a live exchange rate, seller notes, and a product link; optionally enriches each listing with an AI-powered Fair Value Analysis that provides a pricing-data-model estimate of fundamental card value, a deal score comparing asking price to model value, a blended current market (raw) price from recent comparable sales, estimated PSA-graded prices, grading population and gem-rate statistics, and short-term price momentum metrics. Core mechanism: HTML scraping of the Cardmarket listing table at per-offer granularity, with optional machine-learned valuation overlay for supported sets (Scarlet & Violet and Mega Evolution) to support pricing, grading, and arbitrage decisions. Output nature: structured, per-offer records combining marketplace metadata (card, seller, condition, language, quantity, price, comments, link), currency-converted prices, and—when enabled—model-derived valuation, discount percentages vs model and vs spot market, grading estimates, population metrics, and recent price-change indicators.\n\n## Use cases\n\n- Identify individual listings trading below modelled fair value to find potential buy/flip opportunities (arbitrage for investors and resellers).\n- Assess whether a market price justifies the cost and expected return of professional grading (grading ROI analysis).\n- Monitor specific cards or sellers for daily price movements and surfaced bargains (price monitoring and alerts).\n- Build watchlists and automated workflows to capture deals across multiple Cardmarket product pages or seller stocks.\n- Find undervalued Special Illustration Rares and other high-value printings by sorting listings by discount vs model value.\n- Estimate PSA 9/PSA 10 market values and combine with gem-rate and population data to evaluate scarcity and graded price upside.\n- Spot early momentum by combining short-term price-change metrics with deal scores to find cards gaining price momentum before wider market repricing.",
+      "inputSchema": {
+        "title": "Cardmarket Scraper Input",
+        "type": "object",
+        "schemaVersion": 1,
+        "properties": {
+          "productUrl": {
+            "title": "Cardmarket card or seller URL",
+            "description": "A card's product page, or a seller's offers page (e.g. <code>/Users/{seller}/Offers/Singles</code>) to scrape that seller's listings. To add more links, use \"More card or seller URLs\" below.",
+            "type": "string",
+            "prefill": "https://www.cardmarket.com/en/Pokemon/Products/Singles/151/Blastoise-ex-V3-MEW200"
+          },
+          "productUrls": {
+            "title": "More card or seller URLs",
+            "description": "Scrape up to 100 links in one run - one card page or seller offers page per line. Filters and max listings apply to each link. Useful for monitoring a watchlist on a schedule.",
+            "type": "array"
+          },
+          "minCondition": {
+            "title": "Minimum condition",
+            "description": "Only return listings at or better than this condition.",
+            "type": "string",
+            "default": "NM"
+          },
+          "language": {
+            "title": "Language",
+            "description": "Only return listings in this language.",
+            "type": "string",
+            "enum": [
+              "any",
+              "English",
+              "French",
+              "German",
+              "Spanish",
+              "Italian",
+              "S-Chinese",
+              "Japanese",
+              "Portuguese",
+              "Russian",
+              "Korean"
+            ],
+            "default": "any"
+          },
+          "minPrice": {
+            "title": "Min price (EUR)",
+            "description": "Only return listings at or above this price in EUR.",
+            "type": "number"
+          },
+          "maxPrice": {
+            "title": "Max price (EUR)",
+            "description": "Only return listings at or below this price in EUR.",
+            "type": "number"
+          },
+          "sellerCountry": {
+            "title": "Seller country",
+            "description": "Only show listings from sellers in this country. Applies to card pages only.",
+            "type": "string",
+            "enum": [
+              "any",
+              "AT",
+              "BE",
+              "BG",
+              "CA",
+              "HR",
+              "CY",
+              "CZ",
+              "DK",
+              "EE",
+              "FI",
+              "FR",
+              "DE",
+              "GR",
+              "HU",
+              "IS",
+              "IE",
+              "IT",
+              "JP",
+              "LV",
+              "LI",
+              "LT",
+              "LU",
+              "MT",
+              "NL",
+              "NO",
+              "PL",
+              "PT",
+              "RO",
+              "SG",
+              "SK",
+              "SI",
+              "ES",
+              "SE",
+              "CH",
+              "GB"
+            ],
+            "default": "any"
+          },
+          "maxResults": {
+            "title": "Max listings per card or seller",
+            "description": "Maximum listings to return for each link. Card pages return at most 50 (the cheapest matching your filters). Seller pages return up to 500, or up to 200 with a language filter.",
+            "type": "integer",
+            "default": 10
+          },
+          "sellerSort": {
+            "title": "Sort seller listings by",
+            "description": "Order of listings from seller pages. Card pages always return the cheapest listings first.",
+            "type": "string",
+            "enum": [
+              "name",
+              "priceAsc",
+              "priceDesc"
+            ],
+            "default": "name"
+          },
+          "enableFairValue": {
+            "title": "💎 Enable Fair Value Analysis ($)",
+            "description": "Enrich each listing with an AI-powered fair value estimate, blended market price, PSA grade prices, price momentum, gem rate, and PSA population data. Available for Scarlet & Violet and Mega Evolution sets.",
+            "type": "boolean",
+            "default": false
+          },
+          "foil": {
+            "title": "Foil / reverse holo",
+            "description": "Filter listings by foil finish. For Pokémon cards, this filters reverse holos.",
+            "type": "string",
+            "enum": [
+              "any",
+              "foil",
+              "nonFoil"
+            ],
+            "default": "any"
+          },
+          "isSigned": {
+            "title": "Signed cards only",
+            "description": "Only return listings for signed cards.",
+            "type": "boolean",
+            "default": false
+          },
+          "isAltered": {
+            "title": "Altered art only",
+            "description": "Only return listings for altered art cards.",
+            "type": "boolean",
+            "default": false
+          },
+          "isFirstEd": {
+            "title": "First edition only",
+            "description": "Only return first edition listings.",
+            "type": "boolean",
+            "default": false
+          },
+          "isPlayset": {
+            "title": "Playsets only",
+            "description": "Only return playset listings (4 copies).",
+            "type": "boolean",
+            "default": false
+          },
+          "sellerType": {
+            "title": "Seller type",
+            "description": "Filter by seller type. Applies to card pages only.",
+            "type": "string",
+            "enum": [
+              "any",
+              "private",
+              "commercial"
+            ],
+            "default": "any"
+          }
+        },
+        "required": []
+      },
+      "outputSchema": {
+        "condition": "null | string",
+        "sellerComment": "null | string",
+        "eurUsdRate": "number",
+        "price": "number",
+        "priceUsd": "number",
+        "quantity": "number",
+        "cardName": "string",
+        "currency": "string",
+        "game": "string",
+        "language": "string",
+        "productUrl": "string",
+        "sellerName": "string",
+        "setName": "string"
+      }
+    }
+  ]
+}

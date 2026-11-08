@@ -1,0 +1,268 @@
+{
+  "actor": "crawloop/tcgplayer-listings-scraper",
+  "retrieved_at": "2026-11-06",
+  "method": "Apify MCP fetch_actor_details; no Actor run",
+  "note": "Alternative for the same user-selected supplier. No protection bypass is advertised in the returned summary. The Actor reads logged-out public marketplace listing data; no login or technical block is bypassed.",
+  "actorInfo": {
+    "title": "TCGPlayer Listings Scraper — Prices, Sellers & Market Data",
+    "url": "https://apify.com/crawloop/tcgplayer-listings-scraper",
+    "id": "hhS3eFcCa8PIIXhbR",
+    "fullName": "crawloop/tcgplayer-listings-scraper",
+    "pictureUrl": "https://images.apifyusercontent.com/fhF1dme9045V-oFmZFjuzxLeoA6pffChXxi9pPUIXdc/rs:fill:76:76/cb:1/aHR0cHM6Ly9hcGlmeS1pbWFnZS11cGxvYWRzLXByb2QuczMudXMtZWFzdC0xLmFtYXpvbmF3cy5jb20vY2JpT2M4ZUpDT1BQeWJ3ZDEtYWN0b3ItaGhTM2VGY0NhOFBJSVhoYlItbjJ3aGVnVDJpUS1jcmF3bG9vcF9hY3RvcnNfaWNvbi5wbmc.webp",
+    "developer": {
+      "username": "crawloop",
+      "isOfficialApify": false,
+      "url": "https://apify.com/crawloop"
+    },
+    "description": "",
+    "categories": [
+      "Ecommerce",
+      "Lead Generation"
+    ],
+    "pricing": {
+      "model": "FREE",
+      "userTier": "FREE"
+    },
+    "modifiedAt": "2026-09-03T20:41:24.390Z",
+    "isDeprecated": false
+  },
+  "readme": "## TCGPlayer Listings Scraper\n\nA scraper for the US trading-card marketplace TCGPlayer that extracts live seller listings and market context for collectible card products (Pokémon, Magic: The Gathering, Yu-Gi-Oh!, Lorcana, One Piece, and similar). The Actor reads the public marketplace JSON used by the website (no login or developer API key required) and returns flat, per-seller-listing records containing USD offer price and shipping, condition and printing attributes, available quantity, seller identity and rating, seller program flags, and product-level market statistics (median/market/lowest offers and cheapest-with-shipping). Technical capabilities include paginating every seller offer for a SKU, walking a seller’s shop inventory, performing keyword discovery to find matching SKUs then scraping their listings, optional attachment of recent completed sales for a SKU, deduplication of listings across inputs, and a monitor-style mode that records seen listing IDs so subsequent runs emit only new listings. Keywords: TCGPlayer scraper, listings scraper, seller shop export, SKU restock pricing, marketplace JSON scraping, USD offers, shipping, condition, printing, market stats, seller intelligence, listing monitor, deduplicated listing rows.\n\n## Use cases\n\n- Monitor restock pricing and available conditions for a specific SKU (Pokémon, MTG, etc.).\n- Export a seller’s active inventory for shop-level analysis or reporting, with optional per-card filtering.\n- Watch for new offers on a product for arbitrage or price-alert workflows (emit only newly-seen listings).\n- Keyword-driven discovery: search terms to find products, then collect seller offers and market context.\n- Compare US live listing asks with EU or other-market comps by pairing with other marketplace scrapers.\n- Build shop intelligence dashboards including seller program flags, public ratings, sales band, and shipping costs.\n- Attach recent completed-sales history for SKU-level sales context and comps.",
+  "inputSchema": {
+    "title": "TCGPlayer Listings Scraper — product, seller shop, or keyword",
+    "type": "object",
+    "schemaVersion": 1,
+    "properties": {
+      "searchKeywords": {
+        "title": "Search keywords",
+        "description": "TCGPlayer product search queries (e.g. charizard, black lotus). Each keyword finds matching products, then seller listings on those SKUs. Results are merged and deduplicated by listing ID.",
+        "type": "array",
+        "prefill": [
+          "charizard"
+        ]
+      },
+      "sellerNames": {
+        "title": "Seller names",
+        "description": "Walk each TCGPlayer seller shop (store name as shown on listings, e.g. ProSoul Games). Optional shopQuery keeps only matching card names.",
+        "type": "array"
+      },
+      "shopQuery": {
+        "title": "Shop name filter",
+        "description": "When walking seller shops (names or seller URLs), only keep products matching this query. Leave empty for full inventory. Does not apply to marketplace keyword search.",
+        "type": "string"
+      },
+      "startUrls": {
+        "title": "Start URLs",
+        "description": "TCGPlayer product, search, or seller URLs. Product pages scrape seller listings. Search URLs parse q + game. seller= / sellerfeedback URLs walk that shop.",
+        "type": "array",
+        "prefill": [
+          {
+            "url": "https://www.tcgplayer.com/product/219058/pokemon-swsh04-vivid-voltage-charizard"
+          }
+        ]
+      },
+      "productLine": {
+        "title": "Game / product line",
+        "description": "Limit keyword search and seller shops to one TCGPlayer catalog. Ignored when a start URL already includes /search/{line}/product.",
+        "type": "string",
+        "enum": [
+          "all",
+          "pokemon",
+          "magic",
+          "yugioh",
+          "lorcana",
+          "one-piece-card-game",
+          "flesh-and-blood-tcg",
+          "digimon-card-game",
+          "star-wars-unlimited",
+          "pokemon-japan"
+        ],
+        "default": "all"
+      },
+      "condition": {
+        "title": "Condition",
+        "description": "Keep only this TCGPlayer condition.",
+        "type": "string",
+        "enum": [
+          "any",
+          "Near Mint",
+          "Lightly Played",
+          "Moderately Played",
+          "Heavily Played",
+          "Damaged",
+          "Unopened"
+        ],
+        "default": "any"
+      },
+      "printing": {
+        "title": "Printing",
+        "description": "Keep only this finish (Normal, Holofoil, Reverse Holofoil, …).",
+        "type": "string",
+        "enum": [
+          "any",
+          "Normal",
+          "Holofoil",
+          "Reverse Holofoil",
+          "1st Edition",
+          "Unlimited"
+        ],
+        "default": "any"
+      },
+      "language": {
+        "title": "Language",
+        "description": "Keep only this print language.",
+        "type": "string",
+        "enum": [
+          "any",
+          "English",
+          "Japanese",
+          "Chinese",
+          "Korean",
+          "German",
+          "French",
+          "Italian",
+          "Spanish",
+          "Portuguese"
+        ],
+        "default": "any"
+      },
+      "sort": {
+        "title": "Sort",
+        "description": "TCGPlayer sort for keyword search. Product listing tables stay in site price order.",
+        "type": "string",
+        "enum": [
+          "best_match",
+          "best_selling",
+          "price_asc",
+          "price_desc",
+          "name_asc"
+        ],
+        "default": "best_match"
+      },
+      "minPrice": {
+        "title": "Min price (USD)",
+        "description": "Drop listings cheaper than this USD amount.",
+        "type": "number"
+      },
+      "maxPrice": {
+        "title": "Max price (USD)",
+        "description": "Drop listings more expensive than this USD amount.",
+        "type": "number"
+      },
+      "listingsPerProduct": {
+        "title": "Max listings per product",
+        "description": "Cap seller offers fetched per product during keyword search (0 = all listings, subject to maxItems / maxPages). Product URLs always paginate listings. Use 5–10 for cheap discovery; 0 for a full offer book.",
+        "type": "integer",
+        "default": 10
+      },
+      "includeSalesHistory": {
+        "title": "Include recent sales",
+        "description": "One extra marketplace call per product for latest completed sales. Adds lastSalePrice / lastSaleDate and a compact recentSales array. Off by default.",
+        "type": "boolean",
+        "default": false
+      },
+      "maxItems": {
+        "title": "Max items",
+        "description": "Maximum listing rows to collect across all keywords, shops, and URLs. 0 = unlimited (subject to maxPages).",
+        "type": "integer",
+        "default": 100
+      },
+      "maxPages": {
+        "title": "Max pages per product / shop / search",
+        "description": "Safety cap on pagination. Search returns ~24 products per page; product listings ~20 offers per page.",
+        "type": "integer",
+        "default": 20
+      },
+      "monitorMode": {
+        "title": "Monitor mode",
+        "description": "On a schedule, push and charge only listing IDs not seen in a previous run. First run delivers the full match set (baseline). Pair with an Apify Schedule and a stable monitorStoreName.",
+        "type": "boolean",
+        "default": false
+      },
+      "monitorStoreName": {
+        "title": "Monitor store name",
+        "description": "Named Key-Value store for seen listing IDs across scheduled runs. Use a distinct name per watch (e.g. charizard-nm vs shop-prosoul).",
+        "type": "string",
+        "default": "tcgplayer-listings-monitor"
+      },
+      "resetMonitorState": {
+        "title": "Reset monitor state",
+        "description": "Clear the seen-ID cache before this run (next run becomes a new baseline).",
+        "type": "boolean",
+        "default": false
+      },
+      "proxyConfiguration": {
+        "title": "Proxy configuration",
+        "description": "Recommended on Apify: RESIDENTIAL. Local runs can leave proxy off — marketplace JSON often works directly.",
+        "type": "object",
+        "default": {
+          "useApifyProxy": true,
+          "apifyProxyGroups": [
+            "RESIDENTIAL"
+          ]
+        },
+        "prefill": {
+          "useApifyProxy": true,
+          "apifyProxyGroups": [
+            "RESIDENTIAL"
+          ]
+        }
+      }
+    }
+  },
+  "outputSchema": {
+    "recentSales": [
+      {
+        "purchasePrice": "number",
+        "quantity": "number",
+        "shippingPrice": "number",
+        "condition": "string",
+        "language": "string",
+        "orderDate": "string",
+        "title": "string",
+        "variant": "string"
+      }
+    ],
+    "sellerPrograms": "string[] | null",
+    "directListing": "boolean",
+    "directSeller": "boolean",
+    "goldSeller": "boolean",
+    "verifiedSeller": "boolean",
+    "medianPrice": "null | number",
+    "lastSalePrice": "number",
+    "listingId": "number",
+    "lowestPrice": "number | null",
+    "lowestPriceWithShipping": "number | null",
+    "marketPrice": "number",
+    "price": "number",
+    "priceWithShipping": "number",
+    "productId": "number",
+    "quantity": "number",
+    "sellerRating": "number",
+    "shippingPrice": "number",
+    "totalListings": "number | null",
+    "cardNumber": "string | null",
+    "condition": "string",
+    "currency": "string",
+    "imageUrl": "string",
+    "language": "string",
+    "languageAbbreviation": "string",
+    "lastSaleCondition": "string",
+    "lastSaleDate": "string",
+    "listingType": "string",
+    "printing": "string",
+    "productLineName": "string | null",
+    "productName": "string | null",
+    "rarityName": "string | null",
+    "recordType": "string",
+    "scrapedAt": "string",
+    "searchQuery": "string | null",
+    "sellerId": "string",
+    "sellerKey": "string",
+    "sellerName": "string",
+    "sellerSales": "string",
+    "setCode": "string | null",
+    "setName": "string | null",
+    "source": "string",
+    "url": "string"
+  }
+}

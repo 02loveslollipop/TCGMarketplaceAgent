@@ -1,0 +1,24 @@
+{
+  "stage": "code-generation",
+  "upstream_ids": ["FR1", "FR2", "FR3", "FR4", "FR5", "FR6", "FR7", "FR8", "FR9", "FR9a", "FR9b", "FR9c", "FR10", "NFR1", "NFR2", "NFR3", "NFR4"],
+  "coverage": [
+    {"id":"FR1","status":"OK","target":"services/orchestrator/agent.py"},
+    {"id":"FR2","status":"OK","target":"services/orchestrator/research.py"},
+    {"id":"FR3","status":"OK","target":"services/orchestrator/suppliers.py"},
+    {"id":"FR4","status":"OK","target":"services/orchestrator/budget.py"},
+    {"id":"FR5","status":"OK","target":"frontend/src/DecisionPanel.tsx"},
+    {"id":"FR6","status":"OK","target":"tests/test_budget.py"},
+    {"id":"FR7","status":"OK","target":"frontend/src/Chat.tsx"},
+    {"id":"FR8","status":"OK","target":"services/admin/app.py"},
+    {"id":"FR9","status":"OK","target":"services/auth/security.py"},
+    {"id":"FR9a","status":"OK","target":"frontend/src/Onboarding.tsx"},
+    {"id":"FR9b","status":"OK","target":"frontend/src/Recovery.tsx"},
+    {"id":"FR9c","status":"OK","target":"services/auth/webauthn.py"},
+    {"id":"FR10","status":"OK","target":"scripts/provision.py"},
+    {"id":"NFR1","status":"OK","target":"tests/test_security.py"},
+    {"id":"NFR2","status":"OK","target":"tests/test_suppliers.py"},
+    {"id":"NFR3","status":"OK","target":"tests/test_repository.py"},
+    {"id":"NFR4","status":"OK","target":"frontend/src/__tests__/chat.test.tsx"}
+  ],
+  "reverse": []
+}
