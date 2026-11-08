@@ -1,10 +1,12 @@
 """Consistent API errors and authenticated remote session introspection."""
 from dataclasses import dataclass
 import uuid
+import os
 import httpx
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from shared.repository import NotFound
 
@@ -21,6 +23,10 @@ class Principal:
 
 def application(title: str) -> FastAPI:
     app = FastAPI(title=title)
+
+    origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
+    if origins:
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
 
     @app.middleware("http")
     async def request_id(request, call_next):

@@ -1,0 +1,5 @@
+/*
+  X-Content-Type-Options: nosniff
+  Referrer-Policy: no-referrer
+  X-Frame-Options: DENY
+  Content-Security-Policy: default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' https: data:; connect-src 'self' https://api.auth.tcg-marketplace.02labs.me https://api.admin.tcg-marketplace.02labs.me https://api.chat.tcg-marketplace.02labs.me; font-src 'self' data:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'

@@ -1,7 +1,7 @@
 import {useLayoutEffect,useState} from 'react';
 import {Alert,Box,Button,Container,Form,FormField,Header,Input,SpaceBetween} from '@cloudscape-design/components';
 import {colorBackgroundLayoutMain,colorTextBodyDefault,fontFamilyBase,fontSizeBodyM,lineHeightBodyM} from '@cloudscape-design/design-tokens';
-import {api} from './client';
+import {api,apiUrl} from './client';
 import type {Session} from './contracts';
 import {WebAuthnLogin} from './WebAuthn';
 import {Onboarding} from './Onboarding';
@@ -37,7 +37,7 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
       let result:{access_token?:string;challenge_token?:string;methods?:string[]};
       if(challenge) result=await api('/api/auth/totp/challenge','',{method:'POST',body:JSON.stringify({challenge_token:challenge,code})});
       else {
-        const response=await fetch('/api/auth/token',{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({username,password})});
+        const response=await fetch(apiUrl('/api/auth/token'),{method:'POST',headers:{'Content-Type':'application/x-www-form-urlencoded'},body:new URLSearchParams({username,password})});
         const data=await response.json();
         if(!response.ok) throw new Error(data.error?.message||'Login failed.');
         result=data;

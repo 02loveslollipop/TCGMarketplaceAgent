@@ -14,7 +14,7 @@ export function Shell({admin=false}:{admin?:boolean}) {
   function clear(){setToken('');setUser(null);}
   async function signOut(){try{await api('/api/auth/logout',token,{method:'POST'});}catch{setNotice('Signed out locally. Server session invalidation could not be confirmed.');}finally{clear();}}
   if(!user)return <Login notice={notice} onLogin={(token,user)=>{setToken(token);setUser(user);setNotice('');}}/>;
-  return <AppLayout navigationHide toolsHide content={<ContentLayout header={<Header variant="h1" actions={<SpaceBetween direction="horizontal" size="s"><Link data-testid="portal-switch-link" href={admin?'/':'/admin/'}>{admin?'Chat':'Admin portal'}</Link><Button data-testid="logout-button" onClick={()=>void signOut()}>Sign out</Button></SpaceBetween>}>Pokémon TCG · Private PoC</Header>}>
+  return <AppLayout navigationHide toolsHide content={<ContentLayout header={<Header variant="h1" actions={<SpaceBetween direction="horizontal" size="s"><Link data-testid="portal-switch-link" href={admin?(import.meta.env.VITE_CHAT_WEB_URL || '/'): (import.meta.env.VITE_ADMIN_WEB_URL || '/admin/')}>{admin?'Chat':'Admin portal'}</Link><Button data-testid="logout-button" onClick={()=>void signOut()}>Sign out</Button></SpaceBetween>}>Pokémon TCG · Private PoC</Header>}>
     <SpaceBetween size="l">
       <Box>Signed in as {user.username}</Box>
       {admin?(user.role==='admin'?<Admin token={token}/>:<Alert type="error">Administrator access required.</Alert>):<Chat token={token}/>}

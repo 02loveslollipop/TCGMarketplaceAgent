@@ -22,12 +22,18 @@ from services.auth.security import AuthenticationError, aware
 
 class WebAuthn:
     def __init__(self, security, rp_id="localhost", origin="http://localhost:8080"):
-        parsed=urlparse(origin)
-        if parsed.hostname != rp_id or parsed.username or parsed.password or parsed.path not in {"", "/"} or parsed.query or parsed.fragment:
-            raise ValueError("WebAuthn origin must be a fixed origin matching its RP ID.")
-        if parsed.scheme != "https" and not (rp_id == "localhost" and parsed.scheme == "http"):
-            raise ValueError("WebAuthn requires HTTPS except on localhost.")
-        self.security,self.repo,self.rp_id,self.origin=security,security.repo,rp_id,origin.rstrip("/")
+        origins = [item.strip().rstrip("/") for item in origin.split(",") if item.strip()]
+        if not origins:
+            raise ValueError("At least one WebAuthn origin is required.")
+        for item in origins:
+            parsed = urlparse(item)
+            host = parsed.hostname or ""
+            if (not (host == rp_id or host.endswith("." + rp_id)) or parsed.username or parsed.password
+                or parsed.path not in {"", "/"} or parsed.query or parsed.fragment):
+                raise ValueError("WebAuthn origins must match the RP ID or a subdomain.")
+            if parsed.scheme != "https" and not (rp_id == "localhost" and host == "localhost" and parsed.scheme == "http"):
+                raise ValueError("WebAuthn requires HTTPS except on localhost.")
+        self.security,self.repo,self.rp_id,self.origin=security,security.repo,rp_id,origins[0] if len(origins)==1 else origins
 
     def checked_user(self, session, user):
         stored=session.scalar(select(User).where(User.id==user.id).with_for_update())

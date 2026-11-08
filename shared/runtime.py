@@ -18,5 +18,8 @@ def repository():
 
 
 def secret_file(variable: str, default: str) -> str:
+    direct = os.getenv(variable.removesuffix("_FILE"))
+    if direct is not None:
+        return direct.strip()
     path = Path(os.getenv(variable, default))
     return path.read_text().strip()

@@ -1,7 +1,20 @@
 import type { AgentEvent } from './contracts';
 
+const endpoints: Record<string, string | undefined> = {
+  auth: import.meta.env.VITE_AUTH_URL,
+  admin: import.meta.env.VITE_ADMIN_API_URL,
+  chat: import.meta.env.VITE_CHAT_API_URL,
+};
+
+export function apiUrl(path: string): string {
+  const match = /^\/api\/(auth|admin|chat)(\/.*)$/.exec(path);
+  if (!match) throw new Error('Invalid API path.');
+  const base = endpoints[match[1]];
+  return base ? `${base.replace(/\/$/, '')}${match[2]}` : path;
+}
+
 export async function api<T>(path:string, token:string, options:RequestInit={}):Promise<T> {
-  const response=await fetch(path,{...options,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});
+  const response=await fetch(apiUrl(path),{...options,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});
   if(!response.ok) {
     const body=await response.json().catch(()=>({}));
     throw new Error(body.error?.message || `Request failed (${response.status}).`);
@@ -10,7 +23,7 @@ export async function api<T>(path:string, token:string, options:RequestInit={}):
 }
 
 export async function stream(path:string, token:string, body:unknown, receive:(event:AgentEvent)=>void, signal:AbortSignal) {
-  const response=await fetch(path,{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(body),signal});
+  const response=await fetch(apiUrl(path),{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(body),signal});
   if(!response.ok) {
     const error=await response.json().catch(()=>({}));
     throw new Error(error.error?.message || `Request failed (${response.status}).`);

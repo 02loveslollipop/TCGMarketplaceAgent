@@ -258,3 +258,22 @@ def test_wrong_challenge_and_distinct_registration_authentication_purpose(repo,s
     with pytest.raises(AuthenticationError,match="consumed"):
         service.claim(second["challenge_id"],user,"authentication")
     assert service.finish_registration(user,second["challenge_id"],key.register(second["options"]))["enrolled"]
+
+
+def test_shared_rp_accepts_only_configured_frontend_origins(repo, setup):
+    user, previous, key = setup
+    rp = "tcg-marketplace.02labs.me"
+    chat = "https://chat." + rp
+    admin = "https://admin." + rp
+    service = WebAuthn(previous.security, rp, chat + "," + admin)
+    ceremony = service.begin_registration(user, "Shared key")
+    service.finish_registration(user, ceremony["challenge_id"], key.register(ceremony["options"], origin=chat, rp=rp))
+    user = repo.user(user_id=user.id)
+    token, request = begin_login(service, user)
+    result = service.finish_authentication(token, request["challenge_id"], key.assert_login(request["options"], origin=admin, rp=rp))
+    assert service.security.current(result["access_token"]).id == user.id
+    token, request = begin_login(service, user)
+    with pytest.raises(AuthenticationError):
+        service.finish_authentication(token, request["challenge_id"], key.assert_login(request["options"], origin="https://evil." + rp, rp=rp, counter=2))
+    with pytest.raises(ValueError):
+        WebAuthn(previous.security, rp, "https://evil" + rp)
