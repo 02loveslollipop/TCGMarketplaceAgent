@@ -52,7 +52,7 @@ jobs:
           docker run -d --name tcg-agent-test -p 127.0.0.1:18999:18999 \
             -e SERVICE_NAME=admin -e PORT=18999 -e DATABASE_URL=sqlite:////tmp/ci.db tcg-agent-test
           trap 'docker logs tcg-agent-test; docker rm -f tcg-agent-test' EXIT
-          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:18999/health
+          curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18999/health
   deploy-heroku:
     if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
     needs: [test-python, test-frontend, test-container]
