@@ -41,3 +41,7 @@ output/playwright/
 
 # Editor swap files can contain local environment secrets
 .*.sw?
+
+# Local-only project guidance and handoff
+/AGENTS.md
+/HANDOFF.md
