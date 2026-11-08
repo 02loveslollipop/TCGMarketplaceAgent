@@ -4,6 +4,7 @@ import {afterEach,expect,it,vi} from 'vitest';
 import {Login} from '../Login';
 import {Onboarding} from '../Onboarding';
 import {RecoveryLogin,RecoverySettings} from '../Recovery';
+import {TotpSettings} from '../TotpSettings';
 import {startRegistration} from '@simplewebauthn/browser';
 
 vi.mock('@simplewebauthn/browser',()=>({startAuthentication:vi.fn(),startRegistration:vi.fn(),WebAuthnAbortService:{cancelCeremony:vi.fn()}}));
@@ -11,10 +12,13 @@ const json=(value:unknown,status=200)=>new Response(JSON.stringify(value),{statu
 afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();});
 
 it('keeps login restricted through TOTP confirmation and clears codes when finished',async()=>{
-  vi.stubGlobal('fetch',vi.fn(async(path:string)=>path.endsWith('/token')?json({enrollment_token:'limited'}):path.endsWith('/enrollment')?json({secret:'fixture-secret'}):json({recovery_codes:['fixture-code']})));
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>path.endsWith('/token')?json({enrollment_token:'limited'}):path.endsWith('/enrollment')?json({secret:'fixture-secret',uri:'otpauth://totp/Pokemon:user?secret=FIXTURESECRET&issuer=Pokemon'}):json({recovery_codes:['fixture-code']})));
   const user=userEvent.setup(),onLogin=vi.fn();render(<Login onLogin={onLogin}/>);
   await user.type(screen.getByLabelText('Username'),'new-user');await user.type(screen.getByLabelText('Password'),'password');await user.click(screen.getByRole('button',{name:'Sign in'}));
   await user.click(await screen.findByRole('button',{name:'Set up authenticator app'}));
+  expect(screen.getByRole('img',{name:'Authenticator setup QR code'})).toBeInTheDocument();
+  expect(screen.queryByLabelText('Setup key')).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button',{name: /Can't scan the QR code/}));
   expect(screen.getByLabelText('Setup key')).toHaveValue('fixture-secret');expect(onLogin).not.toHaveBeenCalled();
   await user.type(screen.getByLabelText('Authenticator code'),'123456');await user.click(screen.getByRole('button',{name:'Confirm authenticator app'}));
   expect(await screen.findByText('fixture-code')).toBeInTheDocument();expect(screen.getByRole('button',{name:'Finish setup and sign in'})).toBeDisabled();
@@ -63,4 +67,16 @@ it('submits a recovery code with the password challenge and handles rejection',a
   await user.click(screen.getByRole('button',{name:'Use a recovery code'}));await user.type(screen.getByLabelText('Recovery code'),'bad');await user.click(screen.getByRole('button',{name:'Use recovery code'}));
   expect(await screen.findByText('Invalid code')).toBeInTheDocument();expect(authenticated).not.toHaveBeenCalled();
   await user.type(screen.getByLabelText('Recovery code'),'good');await user.click(screen.getByRole('button',{name:'Use recovery code'}));await waitFor(()=>expect(authenticated).toHaveBeenCalledWith({access_token:'verified'}));
+});
+
+
+it('shows a QR code and manual fallback when adding an authenticator in settings',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>json({secret:'settings-key',uri:'otpauth://totp/Pokemon:user?secret=SETTINGSKEY&issuer=Pokemon'})));
+  const user=userEvent.setup();render(<TotpSettings token="full" enrolled={false} onEnrollment={()=>{}}/>);
+  await user.click(screen.getByRole('button',{name:'Authenticator settings'}));
+  await user.click(screen.getByRole('button',{name:'Set up authenticator'}));
+  expect(await screen.findByRole('img',{name:'Authenticator setup QR code'})).toBeInTheDocument();
+  expect(screen.queryByLabelText('Setup key')).not.toBeInTheDocument();
+  await user.click(screen.getByRole('button',{name: /Can't scan the QR code/}));
+  expect(screen.getByLabelText('Setup key')).toHaveValue('settings-key');
 });
