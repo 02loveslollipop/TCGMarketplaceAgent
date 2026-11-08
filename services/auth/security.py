@@ -1,0 +1,241 @@
+"""Argon2id, purpose-bound JWTs and transactional TOTP challenges."""
+from datetime import datetime, timedelta, timezone
+import time
+import secrets
+from uuid import uuid4
+
+from argon2 import PasswordHasher, Type
+from argon2.exceptions import InvalidHashError, VerificationError
+from cryptography.fernet import Fernet
+import jwt
+import pyotp
+from sqlalchemy import select, delete
+
+from shared.contracts import utcnow
+from shared.db import Challenge, User, EnrollmentState, RecoveryCode, WebAuthnCredential
+
+
+class AuthenticationError(Exception):
+    pass
+
+
+password_hasher = PasswordHasher(time_cost=3, memory_cost=65536, parallelism=2, type=Type.ID)
+_DUMMY_HASH = password_hasher.hash("constant-time-nonaccount-value")
+
+
+def hash_password(password: str) -> str:
+    if len(password) < 12 or len(password) > 256:
+        raise ValueError("Password must contain 12 to 256 characters.")
+    return password_hasher.hash(password)
+
+
+def verify_password(stored_hash: str | None, password: str) -> bool:
+    if len(password) > 256:
+        return False
+    try:
+        return password_hasher.verify(stored_hash or _DUMMY_HASH, password) and stored_hash is not None
+    except (VerificationError, InvalidHashError):
+        return False
+
+
+class Tokens:
+    def __init__(self, public_key: str, private_key: str | None = None):
+        self.public_key, self.private_key = public_key, private_key
+
+    def issue(self, user: User, kind="access", challenge_id=None, *, dev_session=None) -> str:
+        now = utcnow()
+        payload = {"sub":user.id, "iss":"pokemon-tcg-auth", "aud":"pokemon-tcg-poc",
+                   "iat":now, "nbf":now, "exp":now + timedelta(minutes=15 if kind == "access" else 5),
+                   "jti":str(uuid4()), "type":kind, "version":user.token_version}
+        if challenge_id:
+            payload["challenge_id"] = challenge_id
+        if dev_session is not None:
+            payload["dev_session"] = dev_session
+        return jwt.encode(payload, self.private_key, algorithm="RS256")
+
+    def read(self, token: str, kind="access") -> dict:
+        try:
+            claims = jwt.decode(token, self.public_key, algorithms=["RS256"],
+                                issuer="pokemon-tcg-auth", audience="pokemon-tcg-poc",
+                                options={"require":["sub", "exp", "iat", "nbf", "jti", "type", "version"]})
+            if claims["type"] != kind:
+                raise AuthenticationError("Token has incorrect purpose.")
+            return claims
+        except jwt.InvalidTokenError as error:
+            raise AuthenticationError("Invalid or expired token.") from error
+
+
+def aware(value: datetime) -> datetime:
+    return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
+
+
+class Security:
+    def __init__(self, repo, tokens: Tokens, encryption_key: bytes, *, local_password_only: bool = False):
+        self.repo, self.tokens, self.cipher = repo, tokens, Fernet(encryption_key)
+        self._local_password_only = local_password_only
+        # Restarting the auth service invalidates password-only sessions even if
+        # the switch is later re-enabled, preventing old sessions from reviving.
+        self._dev_session = secrets.token_urlsafe(32) if local_password_only else None
+
+    def current(self, token: str, kind="access") -> User:
+        claims = self.tokens.read(token, kind)
+        user = self.repo.user(user_id=claims["sub"])
+        if not user or not user.active or user.token_version != claims["version"]:
+            raise AuthenticationError("Account or session is unavailable.")
+        if kind == "access":
+            dev_session = claims.get("dev_session")
+            if dev_session is not None:
+                if not self._local_password_only or not secrets.compare_digest(str(dev_session), self._dev_session):
+                    raise AuthenticationError("Development session is unavailable.")
+            elif not self.has_factor(user):
+                raise AuthenticationError("Complete second-factor enrollment before using this application.")
+        if kind == "enrollment":
+            with self.repo.transaction() as session:
+                self.enrollment_parent(session,user,claims.get("challenge_id"))
+        return user
+
+    def has_factor(self,user):
+        return bool(user.totp_secret or self.repo.webauthn_credentials(user.id))
+
+    @staticmethod
+    def session_factor(session,user):
+        return bool(user.totp_secret or session.scalar(select(WebAuthnCredential.id).where(WebAuthnCredential.user_id==user.id)))
+
+    def enrollment_parent(self,session,user,challenge_id):
+        stored=session.scalar(select(User).where(User.id==user.id).with_for_update())
+        parent=session.scalar(select(Challenge).where(Challenge.id==challenge_id,Challenge.user_id==user.id).with_for_update())
+        if not stored or not stored.active or stored.token_version!=user.token_version or self.session_factor(session,stored):
+            raise AuthenticationError("Enrollment state changed; sign in again.")
+        if not parent or parent.kind!="enrollment" or parent.consumed or aware(parent.expires_at)<=utcnow() or parent.attempts>=5:
+            raise AuthenticationError("Enrollment expired or consumed; sign in again.")
+        return stored,parent
+
+    def login(self, username: str, password: str) -> dict:
+        user = self.repo.user(username=username)
+        valid = verify_password(user.password_hash if user else None, password)
+        if not valid or not user or not user.active:
+            raise AuthenticationError("Invalid credentials.")
+        if self._local_password_only:
+            return {"access_token":self.tokens.issue(user, dev_session=self._dev_session),
+                    "token_type":"bearer", "expires_in":900}
+        credentials=self.repo.webauthn_credentials(user.id)
+        if user.totp_secret or credentials:
+            challenge = self.repo.add_challenge(user.id, "second_factor_login", utcnow() + timedelta(minutes=5))
+            return {"requires_2fa":True, "challenge_token":self.tokens.issue(user, "second_factor", challenge.id),
+                    "methods":(["webauthn"] if credentials else [])+(["totp"] if user.totp_secret else [])+(["recovery"] if self.recovery_remaining(user) else [])}
+        challenge=self.repo.add_challenge(user.id,"enrollment",utcnow()+timedelta(minutes=5))
+        return {"requires_enrollment":True,"enrollment_token":self.tokens.issue(user,"enrollment",challenge.id)}
+
+    def onboarding_totp(self,token,code=None):
+        user=self.current(token,"enrollment")
+        claims=self.tokens.read(token,"enrollment")
+        failure=None
+        result=None
+        with self.repo.transaction() as session:
+            stored,parent=self.enrollment_parent(session,user,claims["challenge_id"])
+            state=session.get(EnrollmentState,parent.id)
+            if code is None:
+                secret=pyotp.random_base32()
+                if state is None:
+                    state=EnrollmentState(enrollment_id=parent.id);session.add(state)
+                state.totp_secret=self.cipher.encrypt(secret.encode()).decode()
+                return {"secret":secret,"uri":pyotp.TOTP(secret).provisioning_uri(user.username,issuer_name="Pokemon TCG PoC")}
+            if not state or not state.totp_secret:
+                raise AuthenticationError("Start authenticator enrollment first.")
+            parent.attempts+=1
+            try:
+                step=self.verify_code(self.cipher.decrypt(state.totp_secret.encode()).decode(),code,-1)
+                stored.totp_secret=state.totp_secret;stored.totp_last_step=step
+                state.totp_secret=None;parent.consumed=True
+                codes=self.replace_recovery(session,stored)
+                stored.token_version+=1
+                result={"enrolled":True,"sign_in_again":True,"recovery_codes":codes}
+            except AuthenticationError as error:
+                failure=error
+        if failure:raise failure
+        return result
+
+    @staticmethod
+    def replace_recovery(session,user):
+        session.execute(delete(RecoveryCode).where(RecoveryCode.user_id==user.id))
+        codes=[secrets.token_hex(16).upper() for _ in range(10)]
+        session.add_all([RecoveryCode(user_id=user.id,code_hash=password_hasher.hash(code)) for code in codes])
+        return ["-".join(code[i:i+4] for i in range(0,len(code),4)) for code in codes]
+
+    def recovery_remaining(self,user):
+        with self.repo.transaction() as session:
+            return len(list(session.scalars(select(RecoveryCode.id).where(RecoveryCode.user_id==user.id,RecoveryCode.consumed.is_(False)))))
+
+    def regenerate_recovery(self,user,password):
+        with self.repo.transaction() as session:
+            stored=session.scalar(select(User).where(User.id==user.id).with_for_update())
+            if not stored or not stored.active or stored.token_version!=user.token_version or not self.session_factor(session,stored) or not verify_password(stored.password_hash,password):
+                raise AuthenticationError("Account or password could not be verified.")
+            codes=self.replace_recovery(session,stored)
+            stored.token_version+=1
+        return {"recovery_codes":codes,"sign_in_again":True}
+
+    def recover(self,token,code):
+        user=self.current(token,"second_factor")
+        claims=self.tokens.read(token,"second_factor")
+        failure=None
+        with self.repo.transaction() as session:
+            stored=session.scalar(select(User).where(User.id==user.id).with_for_update())
+            parent=session.scalar(select(Challenge).where(Challenge.id==claims.get("challenge_id"),Challenge.user_id==user.id).with_for_update())
+            if not stored or not stored.active or stored.token_version!=claims["version"] or not self.session_factor(session,stored) or not parent or parent.kind!="second_factor_login" or parent.consumed or aware(parent.expires_at)<=utcnow() or parent.attempts>=5:
+                raise AuthenticationError("Second-factor challenge expired or consumed.")
+            parent.attempts+=1
+            normalized=code.replace("-","").replace(" ","").upper()
+            rows=list(session.scalars(select(RecoveryCode).where(RecoveryCode.user_id==user.id,RecoveryCode.consumed.is_(False)).with_for_update()))
+            match=next((row for row in rows if verify_password(row.code_hash,normalized)),None)
+            if match:
+                match.consumed=True;parent.consumed=True
+                result={"access_token":self.tokens.issue(stored),"token_type":"bearer","expires_in":900}
+            else:failure=AuthenticationError("Invalid or already used recovery code.")
+        if failure:raise failure
+        return result
+
+    def enroll_totp(self, user: User) -> dict:
+        if user.totp_secret:
+            raise ValueError("Authenticator is already enrolled.")
+        secret = pyotp.random_base32()
+        self.repo.update_user(user.id, totp_pending=self.cipher.encrypt(secret.encode()).decode())
+        return {"secret":secret, "uri":pyotp.TOTP(secret).provisioning_uri(user.username, issuer_name="Pokemon TCG PoC")}
+
+    def confirm_totp(self, user: User, code: str):
+        if not user.totp_pending:
+            raise AuthenticationError("Start authenticator enrollment first.")
+        secret = self.cipher.decrypt(user.totp_pending.encode()).decode()
+        step = self.verify_code(secret, code, -1)
+        self.repo.update_user(user.id, totp_secret=user.totp_pending, totp_pending=None, totp_last_step=step,
+                              token_version=user.token_version + 1)
+
+    @staticmethod
+    def verify_code(secret: str, code: str, last_step: int) -> int:
+        now = int(time.time()) // 30
+        for step in (now - 1, now, now + 1):
+            if step > last_step and pyotp.TOTP(secret).verify(code, for_time=step * 30):
+                return step
+        raise AuthenticationError("Invalid or already used authenticator code.")
+
+    def second_factor(self, challenge_token: str, code: str) -> dict:
+        user = self.current(challenge_token, "second_factor")
+        claims = self.tokens.read(challenge_token, "second_factor")
+        failure = None
+        with self.repo.transaction() as session:
+            stored_user = session.scalar(select(User).where(User.id == user.id).with_for_update())
+            challenge = session.scalar(select(Challenge).where(Challenge.id == claims["challenge_id"], Challenge.user_id == user.id).with_for_update())
+            if not challenge or challenge.kind!="second_factor_login" or challenge.consumed or aware(challenge.expires_at) <= utcnow() or challenge.attempts >= 5:
+                raise AuthenticationError("Second-factor challenge expired or consumed.")
+            if not stored_user or not stored_user.active or stored_user.token_version!=claims["version"] or not stored_user.totp_secret:
+                raise AuthenticationError("Authenticator app is unavailable for this account/session.")
+            challenge.attempts += 1
+            try:
+                secret = self.cipher.decrypt(stored_user.totp_secret.encode()).decode()
+                stored_user.totp_last_step = self.verify_code(secret, code, stored_user.totp_last_step)
+                challenge.consumed = True
+            except AuthenticationError as error:
+                failure = error
+        if failure:
+            raise failure
+        return {"access_token":self.tokens.issue(stored_user), "token_type":"bearer", "expires_in":900}
