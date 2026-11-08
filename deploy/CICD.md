@@ -3,14 +3,14 @@
 The Test workflow runs Python, frontend and container checks on pushes to
 `main`, pull requests, and when called by a deployment. Deploy Heroku and Deploy
 Cloudflare Pages are separate manual workflows on `main`; each invokes the Test
-workflow for the same commit before deploying. Deploy Heroku releases auth, chat,
-and admin sequentially and scales each to one Eco web dyno. Deploy Cloudflare
+workflow for the same commit before deploying. Deploy Heroku builds the current source with Heroku Python buildpacks, releases
+auth, chat, and admin sequentially, and scales each to one Eco web dyno. Deploy Cloudflare
 Pages builds and uploads both frontends. The deployments are not atomic; a failed
 or partially completed release needs investigation and an explicit rerun or rollback.
 
 ## One-time provider setup
 
-1. Create three Cedar-generation Heroku apps with container stack and Eco web
+1. Create three Cedar-generation Heroku apps with the heroku-24 stack and Eco web
    dynos. Set their app names as GitHub `testing` environment variables
    `HEROKU_AUTH_APP`, `HEROKU_CHAT_APP`, and `HEROKU_ADMIN_APP`.
 2. Create two Cloudflare Pages Direct Upload projects with production branch
@@ -48,6 +48,10 @@ app-only provisioner; CI does not use database administrator credentials.
 | Auth | `JWT_PUBLIC_KEY`, `JWT_PRIVATE_KEY` (full PEM strings), `TOTP_KEY`, `WEBAUTHN_RP_ID=tcg-marketplace.02labs.me`, `WEBAUTHN_ORIGIN=https://chat.tcg-marketplace.02labs.me,https://admin.tcg-marketplace.02labs.me` |
 | Admin | `AUTH_URL=https://api.auth.tcg-marketplace.02labs.me`, `ORCHESTRATOR_URL=https://api.chat.tcg-marketplace.02labs.me` |
 | Orchestrator | `AUTH_URL=https://api.auth.tcg-marketplace.02labs.me`, `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `APIFY_API_KEY` as available |
+
+The Heroku buildpack uses `requirements.txt`, `.python-version`, and `Procfile`.
+The deploy workflow sends a minimal, history-free source snapshot to each Heroku
+app, keeping the app deployment independent of the repository history.
 
 The Heroku entrypoint refuses the local password-only development mode. Its
 `PORT` is supplied by Heroku. PEM values can contain newlines; preserve them
