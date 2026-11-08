@@ -1,0 +1,129 @@
+name: Test and deploy
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      deploy:
+        description: Deploy the tested main commit to the testing environment
+        type: boolean
+        required: true
+        default: false
+permissions:
+  contents: read
+concurrency:
+  group: test-deploy-${{ github.ref }}
+  cancel-in-progress: false
+jobs:
+  test-python:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - run: python -m pip install -e '.[test]'
+      - run: python -m pytest -q
+  test-frontend:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: frontend
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: npm ci
+      - run: npm test
+      - run: npm run build
+  test-container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - run: docker build -f deploy/heroku.Dockerfile -t tcg-agent-test .
+      - name: Verify the non-root image listens on PORT
+        run: |
+          set -eu
+          docker run -d --name tcg-agent-test -p 127.0.0.1:18999:18999 \
+            -e SERVICE_NAME=admin -e PORT=18999 -e DATABASE_URL=sqlite:////tmp/ci.db tcg-agent-test
+          trap 'docker logs tcg-agent-test; docker rm -f tcg-agent-test' EXIT
+          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 1 http://127.0.0.1:18999/health
+  deploy-heroku:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    needs: [test-python, test-frontend, test-container]
+    runs-on: ubuntu-latest
+    environment: testing
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+      - name: Install Heroku CLI
+        run: npm install --global heroku
+      - name: Build image
+        run: docker build -f deploy/heroku.Dockerfile -t tcg-agent:${{ github.sha }} .
+      - name: Authenticate to Heroku registry
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+        run: printf '%s' "$HEROKU_API_KEY" | docker login --username _ --password-stdin registry.heroku.com
+      - name: Push and release services
+        env:
+          HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
+          AUTH_APP: ${{ vars.HEROKU_AUTH_APP }}
+          ADMIN_APP: ${{ vars.HEROKU_ADMIN_APP }}
+          CHAT_APP: ${{ vars.HEROKU_CHAT_APP }}
+          IMAGE: tcg-agent:${{ github.sha }}
+        run: |
+          set -eu
+          for app in "$AUTH_APP" "$CHAT_APP" "$ADMIN_APP"; do
+            test -n "$app"
+            docker tag "$IMAGE" "registry.heroku.com/$app/web"
+            docker push "registry.heroku.com/$app/web"
+            heroku container:release web --app "$app"
+          done
+  deploy-pages:
+    if: github.event_name == 'workflow_dispatch' && inputs.deploy && github.ref == 'refs/heads/main'
+    needs: [test-python, test-frontend, deploy-heroku]
+    runs-on: ubuntu-latest
+    environment: testing
+    permissions:
+      contents: read
+      deployments: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '24'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - name: Build both Pages sites
+        working-directory: frontend
+        env:
+          VITE_AUTH_URL: https://api.auth.tcg-marketplace.02labs.me
+          VITE_ADMIN_API_URL: https://api.admin.tcg-marketplace.02labs.me
+          VITE_CHAT_API_URL: https://api.chat.tcg-marketplace.02labs.me
+          VITE_CHAT_WEB_URL: https://chat.tcg-marketplace.02labs.me
+          VITE_ADMIN_WEB_URL: https://admin.tcg-marketplace.02labs.me
+        run: |
+          npm ci
+          npm run build
+          cp -a dist dist-admin
+          cp dist/admin/index.html dist-admin/index.html
+          rm -rf dist-admin/admin dist/admin
+      - name: Deploy chat
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy frontend/dist --project-name=${{ vars.CLOUDFLARE_CHAT_PROJECT }} --branch=main
+      - name: Deploy admin
+        uses: cloudflare/wrangler-action@v4
+        with:
+          apiToken: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+          accountId: ${{ vars.CLOUDFLARE_ACCOUNT_ID }}
+          command: pages deploy frontend/dist-admin --project-name=${{ vars.CLOUDFLARE_ADMIN_PROJECT }} --branch=main

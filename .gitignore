@@ -38,3 +38,6 @@ frontend/dist/
 build/
 .playwright-cli/
 output/playwright/
+
+# Editor swap files can contain local environment secrets
+.*.sw?
