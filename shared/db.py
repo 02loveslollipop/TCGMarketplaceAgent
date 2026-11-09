@@ -174,3 +174,58 @@ class DailyTokenUsage(Base):
     active_call_id: Mapped[str | None] = mapped_column(String(36))
     active_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
     unverified_usage: Mapped[bool] = mapped_column(Boolean, default=False)
+
+
+class LegalitySet(Base):
+    __tablename__ = "card_sets"
+    id: Mapped[str] = mapped_column(String(80), primary_key=True)
+    ruleset: Mapped[str] = mapped_column(String(24), index=True)
+    tcgdex_id: Mapped[str] = mapped_column(String(32), index=True)
+    set_code: Mapped[str] = mapped_column(String(32), index=True)
+    name: Mapped[str] = mapped_column(String(200))
+    series: Mapped[str] = mapped_column(String(120), default="")
+    release_date: Mapped[str | None] = mapped_column(String(32))
+    legal_standard: Mapped[bool] = mapped_column(Boolean, default=False)
+    legal_expanded: Mapped[bool] = mapped_column(Boolean, default=False)
+    card_count: Mapped[int] = mapped_column(Integer, default=0)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class BannedCard(Base):
+    __tablename__ = "banned_cards"
+    id: Mapped[str] = mapped_column(String(120), primary_key=True)
+    ruleset: Mapped[str] = mapped_column(String(24), index=True)
+    format: Mapped[str] = mapped_column(String(24), index=True)
+    card_id: Mapped[str | None] = mapped_column(String(64), index=True)
+    card_name: Mapped[str] = mapped_column(String(200), index=True)
+    card_name_ja: Mapped[str | None] = mapped_column(String(200))
+    set_code: Mapped[str] = mapped_column(String(32), default="")
+    set_name: Mapped[str | None] = mapped_column(String(200))
+    card_number: Mapped[str] = mapped_column(String(32), default="")
+    reason: Mapped[str | None] = mapped_column(Text)
+    source_url: Mapped[str] = mapped_column(Text, default="")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class LegalitySyncState(Base):
+    __tablename__ = "legality_sync_state"
+    id: Mapped[str] = mapped_column(String(32), primary_key=True, default="current")
+    status: Mapped[str] = mapped_column(String(32), default="never")
+    last_refreshed_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    next_refresh_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    triggered_by: Mapped[str | None] = mapped_column(String(80))
+    international_standard_marks: Mapped[list] = mapped_column(JSON, default=list)
+    japan_standard_marks: Mapped[list] = mapped_column(JSON, default=list)
+    sets_count: Mapped[int] = mapped_column(Integer, default=0)
+    banned_count: Mapped[int] = mapped_column(Integer, default=0)
+    sources: Mapped[list] = mapped_column(JSON, default=list)
+    error: Mapped[str | None] = mapped_column(Text)
+
+
+class UserPreference(Base):
+    __tablename__ = "user_preferences"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    ruleset: Mapped[str] = mapped_column(String(24), default="auto")
+    format: Mapped[str] = mapped_column(String(24), default="auto")
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+

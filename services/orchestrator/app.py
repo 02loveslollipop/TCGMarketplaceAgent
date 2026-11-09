@@ -5,8 +5,10 @@ from fastapi import Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from shared.api import application, require_admin
-from shared.contracts import ChatInput, Decision
+from shared.contracts import ChatInput, ConversationRenamePayload, Decision, UserPreferencesPayload
+from shared.repository import NotFound
 from services.admin.app import serialize_model
+from services.orchestrator.legality_sync import sync_legality
 from services.orchestrator.models import ModelUnavailable, verify_api_id, invocation_context
 from shared.role_policy import RolePolicies, PolicyError
 
@@ -62,6 +64,58 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
     @app.get("/conversations")
     def conversations(user=Depends(current)):
         return [{"id":row.id,"title":row.title} for row in repo.conversations(user.id)]
+
+    @app.put("/conversations/{conversation_id}")
+    def rename_conversation(conversation_id: str, body: ConversationRenamePayload, user=Depends(current)):
+        try:
+            row = repo.rename_conversation(conversation_id, user.id, body.title)
+            return {"id": row.id, "title": row.title}
+        except NotFound:
+            raise HTTPException(404, "Conversation not found.")
+        except ValueError as err:
+            raise HTTPException(422, str(err))
+
+    @app.delete("/conversations/{conversation_id}")
+    def delete_conversation(conversation_id: str, user=Depends(current)):
+        try:
+            repo.delete_conversation(conversation_id, user.id)
+            return {"deleted": True, "id": conversation_id}
+        except NotFound:
+            raise HTTPException(404, "Conversation not found.")
+
+    @app.get("/preferences")
+    def get_preferences(user=Depends(current)):
+        return repo.user_preferences(user.id)
+
+    @app.put("/preferences")
+    def update_preferences(body: UserPreferencesPayload, user=Depends(current)):
+        try:
+            return repo.save_user_preferences(user.id, body.ruleset, body.format)
+        except ValueError as err:
+            raise HTTPException(422, str(err))
+
+    @app.get("/internal/legality/status")
+    def internal_legality_status(user=Depends(current)):
+        require_admin(user)
+        return repo.legality_status()
+
+    @app.post("/internal/legality/refresh")
+    def internal_legality_refresh(user=Depends(current)):
+        require_admin(user)
+        return sync_legality(repo, triggered_by=f"admin:{user.username}")
+
+    @app.get("/internal/activity")
+    def internal_activity(user=Depends(current)):
+        require_admin(user)
+        return repo.admin_executions(limit=50)
+
+    @app.get("/internal/activity/{execution_id}")
+    def internal_activity_detail(execution_id: str, user=Depends(current)):
+        require_admin(user)
+        try:
+            return repo.admin_execution_detail(execution_id)
+        except NotFound:
+            raise HTTPException(404, "Execution not found.")
 
     @app.get("/conversations/{conversation_id}")
     def history(conversation_id: str,user=Depends(current)):
@@ -120,7 +174,19 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
         history = [{"role":row.role,"content":row.content} for row in repo.history(conversation.id,user.id)]
         repo.add_message(conversation.id,user.id,"user",{"text":body.text, "images":[image.model_dump() for image in body.images]})
         execution = repo.new_execution(conversation.id,user.id,policy.id)
-        return stream_response(request,execution,user,agent_factory(policy),initial={"request":body.text or "Help me with these images. Clarify any required purchase preferences.","history":history,"images":[image.model_dump() for image in body.images]})
+        preferences = repo.user_preferences(user.id)
+        return stream_response(
+            request,
+            execution,
+            user,
+            agent_factory(policy),
+            initial={
+                "request": body.text or "Help me with these images. Clarify any required purchase preferences.",
+                "history": history,
+                "images": [image.model_dump() for image in body.images],
+                "preferences": preferences,
+            },
+        )
 
     @app.post("/executions/{execution_id}/resume")
     async def resume(execution_id: str,body: Decision,request: Request,user=Depends(current)):
@@ -128,7 +194,8 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
         if execution.status != "waiting":
             raise HTTPException(409,"Execution is not waiting for an answer.")
         actions = execution.checkpoint.get("actions",[])
-        if body.action not in actions or (body.action in {"keep_missing","substitute"} and not body.approved) or (body.action in {"clarify","substitute"} and not body.text.strip()):
+        text_provided = bool(body.text.strip() or body.selected_option)
+        if body.action not in actions or (body.action in {"keep_missing","substitute"} and not body.approved) or (body.action in {"clarify","substitute"} and not text_provided):
             raise HTTPException(422,"Answer the current question and explicitly approve substitutions or missing cards.")
         policy = await allowed(execution.model_id,user)
         if not repo.claim_execution(execution_id,user.id):

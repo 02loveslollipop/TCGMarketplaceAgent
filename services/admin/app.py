@@ -89,4 +89,25 @@ def create_app(repo, current, auth_url="http://auth:8000", orchestrator_url="htt
         model = repo.save_model(model_id,**body.model_dump(),verified_at=verified_at)
         return serialize_model(model)
 
+    @app.get("/legality/status")
+    async def legality_status(user=Depends(current)):
+        require_admin(user)
+        return await proxy("GET", f"{orchestrator_url}/internal/legality/status", user)
+
+    @app.post("/legality/refresh")
+    async def refresh_legality(user=Depends(current)):
+        require_admin(user)
+        return await proxy("POST", f"{orchestrator_url}/internal/legality/refresh", user)
+
+    @app.get("/activity")
+    async def activity(user=Depends(current)):
+        require_admin(user)
+        return await proxy("GET", f"{orchestrator_url}/internal/activity", user)
+
+    @app.get("/activity/{execution_id}")
+    async def activity_detail(execution_id: str, user=Depends(current)):
+        require_admin(user)
+        return await proxy("GET", f"{orchestrator_url}/internal/activity/{execution_id}", user)
+
     return app
+

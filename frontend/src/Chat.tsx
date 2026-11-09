@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState,type CSSProperties} from 'react';
-import {Alert,Box,Button,CopyToClipboard,FormField,Header,Icon,List,LiveRegion,Modal,Popover,PromptInput,Select,SpaceBetween,StatusIndicator,TextFilter} from '@cloudscape-design/components';
+import {Alert,Box,Button,CopyToClipboard,FormField,Header,Icon,Input,List,LiveRegion,Modal,Popover,PromptInput,Select,SpaceBetween,StatusIndicator,TextFilter} from '@cloudscape-design/components';
 import type {PromptInputProps} from '@cloudscape-design/components';
 import {colorTextBodySecondary,colorTextLabelGenAi,colorTextBodyDefault,fontFamilyBase,fontSizeBodyM,lineHeightBodyM} from '@cloudscape-design/design-tokens';
 import {createPortal} from 'react-dom';
@@ -14,6 +14,8 @@ import './chat.css';
 import {ImageAttachments,SentImages,readImage,MAX_IMAGES} from './ChatImages';
 import {ThinkingTrace} from './ThinkingTrace';
 import {ActivityTrace,decisionText,type ChatEntry,type ChatEvent} from './ChatActivity';
+import {Markdown} from './Markdown';
+import {settingsInputAttributes} from './inputSemantics';
 
 interface DailyUsage {daily_token_limit:number;total_tokens:number;remaining_tokens:number;unverified_usage:boolean;in_progress:boolean}
 interface HistoryRow {role:string;created_at?:string;content:{images?:ImageContext[];text?:string;type?:AgentEvent['type'];data?:unknown;execution_id?:string;decision?:Decision}}
@@ -34,6 +36,8 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
   const [usage,setUsage]=useState<DailyUsage|null>(null),[usageError,setUsageError]=useState('');
   const [filter,setFilter]=useState(''),[historyCount,setHistoryCount]=useState(15);
   const [localArtifact,setLocalArtifact]=useState<ChatArtifact|null>(null),[jumpVisible,setJumpVisible]=useState(false),[announcement,setAnnouncement]=useState('');
+  const [renameTarget,setRenameTarget]=useState<Conversation|null>(null),[renameTitle,setRenameTitle]=useState(''),[renaming,setRenaming]=useState(false),[renameError,setRenameError]=useState('');
+  const [deleteTarget,setDeleteTarget]=useState<Conversation|null>(null),[deleting,setDeleting]=useState(false),[deleteError,setDeleteError]=useState('');
   const controller=useRef<AbortController|null>(null),running=useRef(false),runId=useRef(0),alive=useRef(true),entryId=useRef(0);
   const log=useRef<HTMLDivElement>(null),prompt=useRef<PromptInputProps.Ref>(null),atBottom=useRef(true),previewTrigger=useRef<HTMLElement|null>(null);
   function entry(event:ChatEvent,at?:string):ChatEntry{return {...event,id:`chat-event-${++entryId.current}`,at};}
@@ -93,6 +97,26 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
       if(!alive.current)return;setImages([]);setImageError('');setConversation(id);setEvents(restored);setQuestion(waitingQuestion);setExecution(waitingExecution);closePreview();atBottom.current=true;setJumpVisible(false);setAnnouncement('Conversation loaded.');onConversationSelected?.();
     }catch(error){setError((error as Error).message);}finally{if(alive.current)setHistoryLoading(false);}
   }
+  async function handleRename(){
+    if(!renameTarget||!renameTitle.trim())return;
+    setRenaming(true);setRenameError('');
+    try{
+      const updated=await api<Conversation>(`/api/chat/conversations/${renameTarget.id}`,token,{method:'PUT',body:JSON.stringify({title:renameTitle.trim()})});
+      setConversations(previous=>previous.map(item=>item.id===renameTarget.id?{...item,title:updated.title}:item));
+      setRenameTarget(null);
+    }catch(error){setRenameError((error as Error).message);}finally{setRenaming(false);}
+  }
+  async function handleDelete(){
+    if(!deleteTarget)return;
+    setDeleting(true);setDeleteError('');
+    try{
+      await api<{status:string}>(`/api/chat/conversations/${deleteTarget.id}`,token,{method:'DELETE'});
+      const targetId=deleteTarget.id;
+      setConversations(previous=>previous.filter(item=>item.id!==targetId));
+      if(conversation===targetId)newConversation();
+      setDeleteTarget(null);
+    }catch(error){setDeleteError((error as Error).message);}finally{setDeleting(false);}
+  }
   function openArtifact(artifact:ChatArtifact){previewTrigger.current=document.activeElement as HTMLElement;if(onPreview)onPreview(artifact);else setLocalArtifact(artifact);}
   function reuse(request:string,context:ImageContext[]=[]){if(locked||question)return;setText(request);setImages(context);setImageError('');prompt.current?.focus();setAnnouncement('Request copied to the composer. Review it before sending.');}
   const selectedModel=models.find(model=>model.id===modelId);
@@ -108,7 +132,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     <SpaceBetween size="m">
       <TextFilter filteringText={filter} filteringPlaceholder="Find a conversation" filteringAriaLabel="Find a conversation" onChange={({detail})=>{setFilter(detail.filteringText);setHistoryCount(15);}}/>
       {conversationsLoading?<StatusIndicator type="loading">Loading conversations</StatusIndicator>:historyError?<Alert type="error" header="History unavailable" action={<Button onClick={()=>void refreshConversations()}>Retry history</Button>}>{historyError}</Alert>:<div>
-        <List ariaLabel="Saved conversations" items={filtered.slice(0,historyCount)} renderItem={row=>({id:row.id,content:<Button variant="inline-link" disabled={locked} nativeButtonAttributes={{'aria-current':row.id===conversation?'page':undefined}} onClick={()=>void load(row.id)}>{row.title}</Button>})}/>
+        <List ariaLabel="Saved conversations" items={filtered.slice(0,historyCount)} renderItem={row=>({id:row.id,content:<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',width:'100%',gap:'8px'}}><div style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}><Button variant="inline-link" disabled={locked} nativeButtonAttributes={{'aria-current':row.id===conversation?'page':undefined}} onClick={()=>void load(row.id)}>{row.title}</Button></div><SpaceBetween direction="horizontal" size="xxs"><Button variant="icon" iconName="edit" ariaLabel={`Rename conversation ${row.title}`} disabled={locked} onClick={event=>{event.stopPropagation();setRenameTarget(row);setRenameTitle(row.title);setRenameError('');}}/><Button variant="icon" iconName="remove" ariaLabel={`Delete conversation ${row.title}`} disabled={locked} onClick={event=>{event.stopPropagation();setDeleteTarget(row);setDeleteError('');}}/></SpaceBetween></div>})}/>
         {!filtered.length&&<Box color="text-body-secondary">{filter?'No matching conversations. Try another search.':'Your conversations will appear here after your first request.'}</Box>}
         {filtered.length>historyCount&&<Button variant="inline-link" onClick={()=>setHistoryCount(count=>count+15)}>View more conversations</Button>}
       </div>}
@@ -150,8 +174,8 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
             if(event.type==='thinking'||event.type==='tool'||event.type==='progress'||event.type==='execution'||event.type==='done')return null;
             if(event.type==='cards'&&events.slice(index+1).find(item=>item.type==='result'||item.type==='user')?.type==='result')return null;
             if(event.type==='cards')return <div id={event.id} key={event.id} tabIndex={-1} className="chat-turn"><ChatBubble type="incoming" avatar={agentAvatar()} ariaLabel="Agent deck preview">I resolved these card printings. Review quantities and variants before continuing.</ChatBubble><ArtifactPreview artifact={{id:event.id,kind:'deck',...event.data}} onOpen={openArtifact}/></div>;
-            if(event.type==='result')return <div id={event.id} key={event.id} tabIndex={-1} className="chat-turn"><ChatBubble type="incoming" avatar={agentAvatar()} ariaLabel="Agent budget result" actions={<CopyToClipboard variant="icon" textToCopy={event.data.recommendation} copyButtonAriaLabel="Copy recommendation" copySuccessText="Recommendation copied" copyErrorText="Unable to copy"/>}><div className="chat-ai-label">Deck agent · Generated by AI</div><div className="chat-message-text">{event.data.recommendation||'Your deck and budget are ready for review.'}</div>{date&&<Box fontSize="body-s" color="text-body-secondary">{date}</Box>}</ChatBubble><ArtifactPreview artifact={{id:event.id,kind:'budget',result:event.data}} onOpen={openArtifact}/></div>;
-            if(event.type==='question')return <div id={event.id} key={event.id} tabIndex={-1}><ChatBubble type="incoming" avatar={agentAvatar()} ariaLabel="Agent question"><div className="chat-message-text">{event.data.question}</div></ChatBubble></div>;
+            if(event.type==='result')return <div id={event.id} key={event.id} tabIndex={-1} className="chat-turn"><ChatBubble type="incoming" avatar={agentAvatar()} ariaLabel="Agent budget result" actions={<CopyToClipboard variant="icon" textToCopy={event.data.recommendation} copyButtonAriaLabel="Copy recommendation" copySuccessText="Recommendation copied" copyErrorText="Unable to copy"/>}><div className="chat-ai-label">Deck agent · Generated by AI</div><div className="chat-message-text"><Markdown text={event.data.recommendation||'Your deck and budget are ready for review.'}/></div>{date&&<Box fontSize="body-s" color="text-body-secondary">{date}</Box>}</ChatBubble><ArtifactPreview artifact={{id:event.id,kind:'budget',result:event.data}} onOpen={openArtifact}/></div>;
+            if(event.type==='question')return <div id={event.id} key={event.id} tabIndex={-1}><ChatBubble type="incoming" avatar={agentAvatar()} ariaLabel="Agent question"><div className="chat-message-text"><Markdown text={event.data.question}/></div></ChatBubble></div>;
             if(event.type==='stopped')return <div id={event.id} key={event.id} tabIndex={-1}><StatusIndicator type="stopped">{event.data.message}</StatusIndicator></div>;
             return <div id={event.id} key={event.id} tabIndex={-1}><Alert type="error" header="Request interrupted">{event.data.message}</Alert></div>;
           })}</SpaceBetween>
@@ -161,6 +185,9 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
       </>}
       <LiveRegion hidden>{announcement}</LiveRegion>
       {localArtifact&&<Modal visible size="max" header={artifactTitle(localArtifact)} closeAriaLabel="Close result preview" onDismiss={()=>{setLocalArtifact(null);previewTrigger.current?.focus();}}><ArtifactContent artifact={localArtifact}/></Modal>}
+      {renameTarget&&<Modal visible header="Rename conversation" closeAriaLabel="Close rename modal" onDismiss={()=>{setRenameTarget(null);setRenameError('');}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" onClick={()=>{setRenameTarget(null);setRenameError('');}}>Cancel</Button><Button variant="primary" loading={renaming} disabled={!renameTitle.trim()} onClick={()=>void handleRename()}>Save</Button></SpaceBetween></Box>}><FormField label="Conversation title" errorText={renameError}><Input value={renameTitle} onChange={({detail})=>setRenameTitle(detail.value)} placeholder="Enter new title" nativeInputAttributes={settingsInputAttributes}/></FormField></Modal>}
+      {deleteTarget&&<Modal visible header="Delete conversation" closeAriaLabel="Close delete modal" onDismiss={()=>{setDeleteTarget(null);setDeleteError('');}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" onClick={()=>{setDeleteTarget(null);setDeleteError('');}}>Cancel</Button><Button variant="primary" loading={deleting} onClick={()=>void handleDelete()}>Delete</Button></SpaceBetween></Box>}>{deleteError&&<Alert type="error">{deleteError}</Alert>}<Box>Are you sure you want to delete &ldquo;{deleteTarget?.title}&rdquo;? This cannot be undone.</Box></Modal>}
     </div>
   </>;
 }
+

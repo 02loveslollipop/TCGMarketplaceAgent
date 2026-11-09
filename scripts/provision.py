@@ -18,12 +18,18 @@ SERVICE_TABLES = {
     "auth": {"users": "SELECT, INSERT, UPDATE", "challenges": "SELECT, INSERT, UPDATE",
              "webauthn_credentials": "SELECT, INSERT, UPDATE, DELETE", "webauthn_challenges": "SELECT, INSERT, UPDATE",
              "logs": "INSERT", "enrollment_states": "SELECT, INSERT, UPDATE", "recovery_codes": "SELECT, INSERT, UPDATE, DELETE"},
-    "admin": {"models": "SELECT, INSERT, UPDATE", "role_policies": "SELECT, INSERT, UPDATE", "logs": "INSERT"},
+    "admin": {
+        "models": "SELECT, INSERT, UPDATE", "role_policies": "SELECT, INSERT, UPDATE", "logs": "SELECT, INSERT",
+        "card_sets": "SELECT", "banned_cards": "SELECT", "legality_sync_state": "SELECT, INSERT, UPDATE",
+        "executions": "SELECT", "events": "SELECT", "conversations": "SELECT",
+    },
     "orchestrator": {
         "role_policies": "SELECT", "daily_token_usage": "SELECT, INSERT, UPDATE",
-        "models": "SELECT", "conversations": "SELECT, INSERT, UPDATE",
-        "messages": "SELECT, INSERT", "executions": "SELECT, INSERT, UPDATE",
-        "events": "SELECT, INSERT", "logs": "SELECT, INSERT", "graph_checkpoints": "SELECT, INSERT, UPDATE",
+        "models": "SELECT", "conversations": "SELECT, INSERT, UPDATE, DELETE",
+        "messages": "SELECT, INSERT, DELETE", "executions": "SELECT, INSERT, UPDATE, DELETE",
+        "events": "SELECT, INSERT, DELETE", "logs": "SELECT, INSERT", "graph_checkpoints": "SELECT, INSERT, UPDATE, DELETE",
+        "card_sets": "SELECT, INSERT, UPDATE, DELETE", "banned_cards": "SELECT, INSERT, UPDATE, DELETE",
+        "legality_sync_state": "SELECT, INSERT, UPDATE, DELETE", "user_preferences": "SELECT, INSERT, UPDATE, DELETE",
     },
 }
 

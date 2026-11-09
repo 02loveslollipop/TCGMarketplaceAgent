@@ -17,6 +17,7 @@ class State(TypedDict, total=False):
     request: str
     images: list
     history: list
+    preferences: dict
     knowledge: dict
     plan: dict
     legality: dict
@@ -57,17 +58,36 @@ class DeckAgent:
         if state.get("images"):
             progress("context",f"Using {len(state['images'])} image attachments as context; card identities still require source verification.")
         progress("understand","Resolving the request with sourced card and deck research.")
-        plan = await self.planner.resolve(state["request"], state.get("history",[]), knowledge, **({"images":state["images"]} if state.get("images") else {}))
+        kwargs = {}
+        if state.get("images"):
+            kwargs["images"] = state["images"]
+        if state.get("preferences"):
+            kwargs["preferences"] = state["preferences"]
+        try:
+            plan = await self.planner.resolve(state["request"], state.get("history", []), knowledge, **kwargs)
+        except TypeError:
+            plan = await self.planner.resolve(state["request"], state.get("history", []), knowledge)
         return {"knowledge":knowledge, "plan":plan.model_dump(mode="json"), "consent":{},
                 "event":{"type":"progress", "data":{"step":"understand", "message":plan.question or "Resolved actual card/deck identities and preferences."}}}
 
     async def clarify(self, state):
-        decision = Decision.model_validate(interrupt({"kind":"clarification", "question":state["plan"]["question"], "actions":["clarify", "cancel"]}))
+        interrupt_payload = {
+            "kind": "clarification",
+            "question": state["plan"]["question"],
+            "options": state["plan"].get("options", []),
+            "actions": ["clarify", "cancel"],
+        }
+        decision = Decision.model_validate(interrupt(interrupt_payload))
         if decision.action == "cancel":
-            return {"cancelled":True}
-        if decision.action != "clarify" or not decision.text.strip():
+            return {"cancelled": True}
+        text = decision.text.strip()
+        if decision.selected_option and not text:
+            text = decision.selected_option
+        elif decision.selected_option and text:
+            text = f"{decision.selected_option} ({text})"
+        if decision.action != "clarify" or not text:
             raise ValueError("A clarification answer is required.")
-        return {"request":state["request"] + "\nUser clarification: " + decision.text}
+        return {"request": state["request"] + "\nUser clarification: " + text}
 
     async def validate(self, state):
         plan = AgentPlan.model_validate(state["plan"])

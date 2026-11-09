@@ -41,10 +41,11 @@ export function Overview({token,onNavigate}:{token:string;onNavigate?:(section:A
   return <SpaceBetween size="l">
     <Header variant="h1" description="Monitor workspace access, model availability, and daily allowances." actions={<Button iconName="refresh" loading={loading} onClick={()=>setRevision(value=>value+1)}>Refresh</Button>}>Overview</Header>
     <Container header={<Header variant="h2" description={updated?`Last refreshed ${updated.toLocaleTimeString()}.`:'Current workspace configuration.'}>Workspace overview</Header>}>
-      <ColumnLayout columns={3} variant="text-grid">
+      <ColumnLayout columns={4} variant="text-grid">
         <SpaceBetween size="xs"><Box color="text-body-secondary">Active accounts</Box><div data-testid="overview-active-accounts">{count(activeAccounts?.length,accounts.loading)}</div><Box color="text-body-secondary">{accounts.data?`${accounts.data.length} total accounts`:'Accounts with workspace access.'}</Box><Button variant="inline-link" onClick={()=>onNavigate?.('accounts')}>View accounts</Button></SpaceBetween>
         <SpaceBetween size="xs"><Box color="text-body-secondary">Enabled models</Box><div data-testid="overview-enabled-models">{count(enabled?.length,models.loading)}</div><Box color="text-body-secondary">{models.data?`${models.data.length} registered model policies`:'Models enabled globally for chat.'}</Box><Button variant="inline-link" onClick={()=>onNavigate?.('models')}>View model policies</Button></SpaceBetween>
         <SpaceBetween size="xs"><Box color="text-body-secondary">Roles with chat access</Box><div data-testid="overview-usable-roles">{count(usableRoles?.length,policies.loading||models.loading)}</div><Box color="text-body-secondary">A positive quota and an enabled model.</Box><Button variant="inline-link" onClick={()=>onNavigate?.('roles')}>Manage role access</Button></SpaceBetween>
+        <SpaceBetween size="xs"><Box color="text-body-secondary">Activity & Legality</Box><div data-testid="overview-activity-link"><Box fontSize="display-l" fontWeight="bold">Audit</Box></div><Box color="text-body-secondary">Execution traces & legality sync.</Box><Button variant="inline-link" onClick={()=>onNavigate?.('activity')}>View activity logs</Button></SpaceBetween>
       </ColumnLayout>
     </Container>
     <Grid gridDefinition={[{colspan:{default:12,s:8}},{colspan:{default:12,s:4}}]}>

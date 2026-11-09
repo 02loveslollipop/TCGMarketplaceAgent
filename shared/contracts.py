@@ -61,6 +61,8 @@ class Offer(Contract):
 
 class AgentPlan(Contract):
     question: str | None = None
+    options: list[str] = Field(default_factory=list, max_length=8)
+    ruleset: str | None = None
     format: str | None = None
     is_deck: bool = False
     cards: list[CardRequest] = Field(default_factory=list, max_length=60)
@@ -77,7 +79,17 @@ class Legality(Contract):
 class Decision(Contract):
     action: Literal["clarify", "substitute", "keep_missing", "cancel"]
     text: str = Field(default="", max_length=8000)
+    selected_option: str | None = None
     approved: bool = False
+
+
+class UserPreferencesPayload(Contract):
+    ruleset: Literal["auto", "international", "japan"] = "auto"
+    format: Literal["auto", "standard", "expanded"] = "auto"
+
+
+class ConversationRenamePayload(Contract):
+    title: str = Field(min_length=1, max_length=160)
 
 
 class ChatInput(Contract):
@@ -96,3 +108,4 @@ class ChatInput(Contract):
 class StreamEvent(Contract):
     type: Literal["progress", "cards", "question", "result", "error", "done", "execution", "thinking", "tool"]
     data: dict
+

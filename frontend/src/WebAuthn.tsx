@@ -101,15 +101,15 @@ export function WebAuthnSettings({token,onChange,embedded=false}:{token:string;o
     {creating&&<Modal visible header={discard?'Discard authenticator setup?':'Add passkey or security key'} closeAriaLabel="Close authenticator setup" onDismiss={closeCreate} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
       {discard?<><Button ref={keepSetup} onClick={()=>setDiscard(false)}>Keep setting up</Button><Button variant="primary" onClick={discardCreate}>Discard setup</Button></>:<>
         <Button variant="link" disabled={busy} onClick={closeCreate}>Cancel setup</Button>
-        <Button data-testid="webauthn-enroll-button" variant="primary" form={registrationForm} formAction="submit" disabled={busy||!name.trim()} loading={busy}>Add passkey or security key</Button>
+        <Button data-testid="webauthn-enroll-button" variant="primary" disabled={busy||!name.trim()} loading={busy} onClick={()=>void enroll()}>Add passkey or security key</Button>
       </>}
     </SpaceBetween></Box>}>
-      {discard?<Box>Your authenticator setup details will be discarded.</Box>:<form id={registrationForm} onSubmit={event=>{event.preventDefault();void enroll();}}><SpaceBetween size="l">
+      {discard?<Box>Your authenticator setup details will be discarded.</Box>:<SpaceBetween size="l">
         <Box>Name your authenticator, then use your browser’s chooser to create a passkey in your password manager or register a physical security key. After registration, sign in again to continue.</Box>
-        <FormField label="Authenticator name" description="For example, Google Password Manager or Physical security key."><Input ref={nameInput} data-testid="webauthn-name-input" name="authenticator-display-name" nativeInputAttributes={settingsInputAttributes} autoComplete="off" value={name} disabled={busy} onChange={({detail})=>setName(detail.value)}/></FormField>
+        <FormField label="Authenticator name" description="For example, Google Password Manager or Physical security key."><Input ref={nameInput} data-testid="webauthn-name-input" name="authenticator-display-name" nativeInputAttributes={settingsInputAttributes} autoComplete="off" value={name} disabled={busy} onChange={({detail})=>setName(detail.value)} onKeyDown={event=>{if(event.detail.key==='Enter'&&name.trim()&&!busy){event.preventDefault();void enroll();}}}/></FormField>
         {busy&&<Button data-testid="webauthn-enroll-cancel-button" formAction="none" onClick={()=>{cancelled.current=true;WebAuthnAbortService.cancelCeremony();}}>Cancel authenticator</Button>}
         {error&&<Alert type="error">{error}</Alert>}
-      </SpaceBetween></form>}
+      </SpaceBetween>}
     </Modal>}
     {removing&&<Modal visible header={`Remove ${removing.name}?`} closeAriaLabel="Close removal confirmation" onDismiss={()=>{if(!busy)setRemoving(null);}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" disabled={busy} onClick={()=>setRemoving(null)}>Cancel</Button><Button variant="primary" loading={busy} onClick={()=>void remove(removing.id)}>Remove authenticator</Button></SpaceBetween></Box>}><SpaceBetween size="m"><Box>You will no longer be able to use {removing.name} to sign in. Removing it signs you out. Make sure you have another sign-in or recovery method available.</Box>{removalError&&<Alert type="error">{removalError}</Alert>}</SpaceBetween></Modal>}
   </SpaceBetween>;

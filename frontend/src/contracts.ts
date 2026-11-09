@@ -7,7 +7,7 @@ export interface Allocation { offer_id: string; supplier: string; quantity: numb
 export interface BudgetLine { card_id: string; name: string; requested: number; covered: number; allocations: Allocation[]; set_name?: string; number?: string; condition?: string; language?: string; printing?: string }
 export interface Budget { supplier: string; currency: string; complete: boolean; product_subtotal: string; known_shipping: string|null; shipping_confirmed: boolean; confirmed_total: string|null; lines: BudgetLine[] }
 export interface Missing { card_id: string; name: string; quantity: number; set_name?: string; number?: string; condition?: string; language?: string; printing?: string }
-export interface Question { kind: 'clarification'|'missing_cards'; question: string; missing?: Missing[]; guidance?: string; actions: string[] }
+export interface Question { kind: 'clarification'|'missing_cards'; question: string; options?: string[]; missing?: Missing[]; guidance?: string; actions: string[] }
 export interface Model { id: string; label: string; provider: string; api_id: string; enabled: boolean; verified_at?: string|null }
 export interface Session { id: string; username: string; role: string; totp_enrolled: boolean; webauthn_enrolled: boolean; webauthn_credentials_count: number }
 export interface Result { plan: { cards: Card[]; format: string; sources: Source[]; explanation: string }; legality: Legality; offers: Offer[]; budgets: Budget[]; missing: Missing[]; supplier_errors: {supplier:string;message:string}[]; recommendation: string }
@@ -21,5 +21,48 @@ export type AgentEvent =
   | {type:'result';data:Result}
   | {type:'error';data:{message:string}}
   | {type:'done';data:{status:string}};
-export type Decision = {action:'clarify'|'substitute'|'keep_missing'|'cancel';text?:string;approved?:boolean};
+export type Decision = {action:'clarify'|'substitute'|'keep_missing'|'cancel';text?:string;selected_option?:string;approved?:boolean};
 export interface Conversation { id:string;title:string }
+
+export interface UserPreferences {
+  ruleset: 'auto' | 'international' | 'japan';
+  format: 'auto' | 'standard' | 'expanded';
+  updated_at?: string | null;
+}
+
+export interface LegalityStatus {
+  status: string;
+  last_refreshed_at: string | null;
+  next_refresh_at: string | null;
+  triggered_by: string | null;
+  international_standard_marks: string[];
+  japan_standard_marks: string[];
+  sets_count: number;
+  banned_count: number;
+  sources: string[];
+  error: string | null;
+}
+
+export interface AdminExecutionSummary {
+  id: string;
+  conversation_id: string;
+  conversation_title: string;
+  user_id: string;
+  model_id: string;
+  status: string;
+  created_at: string;
+}
+
+export interface AdminExecutionDetail {
+  id: string;
+  conversation_id: string;
+  conversation_title: string;
+  user_id: string;
+  model_id: string;
+  status: string;
+  created_at: string;
+  checkpoint: Record<string, unknown>;
+  reasoning_summary: string;
+  events: { id: string; kind: string; payload: any; created_at: string }[];
+}
+

@@ -13,7 +13,8 @@ repo = repository()
 
 def agent_factory(policy):
     suppliers = Suppliers(api_key=os.getenv("APIFY_API_KEY") or os.getenv("APIFY_TOKEN", ""))
-    return DeckAgent(repo,Planner(GuardedModel(model_for(policy),repo,policy,require_context=True),Research()),suppliers)
+    return DeckAgent(repo, Planner(GuardedModel(model_for(policy), repo, policy, require_context=True), Research(repo)), suppliers)
+
 
 
 app = create_app(repo,remote_auth(os.getenv("AUTH_URL","http://auth:8000")),agent_factory)

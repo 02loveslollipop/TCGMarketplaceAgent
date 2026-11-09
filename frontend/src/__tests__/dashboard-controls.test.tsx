@@ -38,7 +38,7 @@ it('protects a policy draft on cancel and keeps recoverable save errors in the f
  await user.click(screen.getByRole('button',{name:'Cancel'}));expect(screen.getByText('Discard policy changes?')).toBeInTheDocument();
  await user.click(screen.getByRole('button',{name:'Keep editing'}));await user.click(screen.getByRole('button',{name:'Save role policy'}));
  expect(await screen.findByText('Fixture save rejected')).toBeInTheDocument();
- expect(screen.getByLabelText('Daily token quota per user')).toHaveValue('500001');
+ expect(screen.getByLabelText('Daily token quota per user')).toHaveValue(500001);
 });
 
 it('submits account role changes with the target identity and confirms the result',async()=>{

@@ -19,7 +19,7 @@ export function RecoverySettings({token,onFinish}:{token:string;onFinish:()=>voi
   async function generate(){if(busy||!password)return;setBusy(true);setError('');try{const result=await api<{recovery_codes:string[]}>('/api/auth/recovery/regenerate',token,{method:'POST',body:JSON.stringify({password})});setCodes(result.recovery_codes);}catch(error){setError((error as Error).message);}finally{setPassword('');setBusy(false);}}
   return <Container data-testid="recovery-settings-section" header={<Header variant="h2" description="Manage the codes used to recover access to your account.">Recovery codes</Header>}>{codes.length?<RecoveryCodes codes={codes} onFinish={()=>{setCodes([]);onFinish();}}/>:<SpaceBetween size="m">
     <Alert type="info">{remaining===undefined?'Checking recovery codes…':`${remaining} recovery codes remaining.`} Generating a new set invalidates all previous codes and signs you out.</Alert>
-    <FormField label="Current password"><Input data-testid="recovery-current-password" name="current-password" type="password" autoComplete="current-password" value={password} disabled={busy} onChange={({detail})=>setPassword(detail.value)}/></FormField>
+    <FormField label="Current password"><Input data-testid="recovery-current-password" name="current-password" type="password" autoComplete="current-password" nativeInputAttributes={settingsInputAttributes} value={password} disabled={busy} onChange={({detail})=>setPassword(detail.value)}/></FormField>
     <Button data-testid="recovery-regenerate-button" loading={busy} disabled={busy||!password} onClick={()=>void generate()}>Generate new recovery codes</Button>
     {error&&<Alert type="error">{error}</Alert>}</SpaceBetween>}</Container>;
 }

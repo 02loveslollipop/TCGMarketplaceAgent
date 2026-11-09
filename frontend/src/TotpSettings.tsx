@@ -2,6 +2,7 @@ import {useState} from 'react';
 import {Alert,Button,Container,Header,StatusIndicator,ExpandableSection,FormField,Input,SpaceBetween} from '@cloudscape-design/components';
 import {api} from './client';
 import {TotpSetup} from './TotpSetup';
+import {settingsInputAttributes} from './inputSemantics';
 
 export function TotpSettings({token,enrolled,onEnrollment,embedded=false}:{token:string;enrolled:boolean;onEnrollment:()=>void;embedded?:boolean}) {
   const [enrollment,setEnrollment]=useState<{secret:string;uri:string}|null>(null),[code,setCode]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false),[discard,setDiscard]=useState(false);
@@ -12,7 +13,7 @@ export function TotpSettings({token,enrolled,onEnrollment,embedded=false}:{token
     {enrolled?<StatusIndicator type="success">Authenticator enrolled.</StatusIndicator>:!enrollment&&<Button data-testid="totp-enroll-button" loading={busy} onClick={()=>void start()}>Set up authenticator</Button>}
     {enrollment&&<>
       <TotpSetup {...enrollment}/>
-      <FormField label="Authenticator code"><Input data-testid="totp-code-input" autoComplete="one-time-code" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField>
+      <FormField label="Authenticator code"><Input data-testid="totp-code-input" autoComplete="one-time-code" inputMode="numeric" nativeInputAttributes={settingsInputAttributes} value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField>
       <Button data-testid="totp-confirm-button" variant="primary" loading={busy} disabled={busy||!code} onClick={()=>void confirm()}>Confirm authenticator</Button>
       {!discard?<Button disabled={busy} onClick={()=>setDiscard(true)}>Cancel setup</Button>:<Alert type="warning" header="Discard authenticator setup?"><SpaceBetween size="s"><span>The unconfirmed QR code and setup key will be cleared.</span><SpaceBetween direction="horizontal" size="s"><Button onClick={()=>setDiscard(false)}>Keep setting up</Button><Button onClick={()=>{setEnrollment(null);setCode('');setDiscard(false);setError('');}}>Discard setup</Button></SpaceBetween></SpaceBetween></Alert>}
     </>}
