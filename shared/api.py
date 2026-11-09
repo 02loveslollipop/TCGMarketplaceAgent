@@ -21,12 +21,12 @@ class Principal:
     token: str = ""
 
 
-def application(title: str) -> FastAPI:
+def application(title: str, *, credentialed=False) -> FastAPI:
     app = FastAPI(title=title)
 
     origins = [origin.strip() for origin in os.getenv("CORS_ORIGINS", "").split(",") if origin.strip()]
     if origins:
-        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
+        app.add_middleware(CORSMiddleware, allow_origins=origins, allow_credentials=credentialed, allow_methods=["GET", "POST", "PUT", "DELETE", "OPTIONS"], allow_headers=["Authorization", "Content-Type"])
 
     @app.middleware("http")
     async def request_id(request, call_next):

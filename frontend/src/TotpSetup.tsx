@@ -9,7 +9,7 @@ export function TotpSetup({secret,uri}:{secret:string;uri:string}) {
     <QRCodeSVG value={uri} size={224} level="M" marginSize={4} role="img" aria-label="Authenticator setup QR code"/>
     <ExpandableSection headerText="Can't scan the QR code?" expanded={expanded} onChange={({detail})=>setExpanded(detail.expanded)}>
       {expanded&&<FormField label="Setup key" description="Enter this key manually in your authenticator app.">
-        <Input value={secret} readOnly/>
+        <Input name="authenticator-setup-key" autoComplete="off" value={secret} readOnly/>
       </FormField>}
     </ExpandableSection>
   </SpaceBetween>;

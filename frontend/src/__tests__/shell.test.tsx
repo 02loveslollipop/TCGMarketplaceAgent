@@ -14,7 +14,7 @@ const json=(value:unknown)=>new Response(JSON.stringify(value));
 it('moves security to a dedicated page while preserving the chat draft and chosen model',async()=>{
   vi.stubGlobal('fetch',vi.fn(async(path:string)=>json(path.endsWith('/models')?[{id:'test',label:'GPT test',provider:'openai',api_id:'test',enabled:true}]:[])));
   const user=userEvent.setup();render(<Shell/>);
-  await user.click(screen.getByRole('button',{name:'Fixture sign in'}));await screen.findByText('GPT test');
+  await user.click(await screen.findByRole('button',{name:'Fixture sign in'}));await screen.findByText('GPT test');
   await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'Keep this draft');
   expect(screen.queryByRole('heading',{name:'Account security'})).not.toBeInTheDocument();
   await user.click(screen.getByRole('button',{name:'fixture-user'}));
@@ -29,7 +29,7 @@ it('moves security to a dedicated page while preserving the chat draft and chose
 it('navigates from the administration overview to models and accounts',async()=>{
   vi.stubGlobal('fetch',vi.fn(async()=>json([])));
   const user=userEvent.setup();render(<Shell admin/>);
-  await user.click(screen.getByRole('button',{name:'Fixture sign in'}));
+  await user.click(await screen.findByRole('button',{name:'Fixture sign in'}));
   expect(screen.getByRole('heading',{name:'Workspace overview'})).toBeInTheDocument();
   await user.click(screen.getByRole('button',{name:'View model policies'}));
   expect(screen.getByRole('heading',{name:'Model policies',level:1})).toBeInTheDocument();
@@ -40,7 +40,7 @@ it('navigates from the administration overview to models and accounts',async()=>
 it('changes appearance from the top bar and keeps it after signing out',async()=>{
   vi.stubGlobal('fetch',vi.fn(async()=>json([])));
   const user=userEvent.setup();render(<Shell admin/>);
-  await user.click(screen.getByRole('button',{name:'Fixture sign in'}));
+  await user.click(await screen.findByRole('button',{name:'Fixture sign in'}));
   for(const label of ['Dark','Dark blue','Light','Dark blue']){
     await user.click(screen.getByRole('button',{name:/Appearance:/}));
     await user.click(screen.getByRole('menuitem',{name:label}));

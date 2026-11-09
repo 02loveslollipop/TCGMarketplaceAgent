@@ -1,6 +1,6 @@
 import time
 from collections import defaultdict, deque
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
@@ -57,7 +57,7 @@ class RecoveryProof(PasswordChallenge):
 
 
 def create_app(repo, security, webauthn=None):
-    app = application("Pokemon authentication")
+    app = application("Pokemon authentication",credentialed=True)
     webauthn=webauthn or WebAuthn(security)
     attempts = defaultdict(deque)
 
@@ -129,14 +129,22 @@ def create_app(repo, security, webauthn=None):
         except AuthenticationError as error:
             raise HTTPException(401, str(error)) from None
 
-    @app.get("/session")
-    def session(user=Depends(current)):
+    def serialize_session(user):
         credentials=repo.webauthn_credentials(user.id)
         return {"id":user.id, "username":user.username, "role":user.role, "totp_enrolled":bool(user.totp_secret),
                 "webauthn_enrolled":bool(credentials),"webauthn_credentials_count":len(credentials)}
 
+    @app.get("/session")
+    def session(user=Depends(current)):
+        return serialize_session(user)
+
+    from services.auth.portal_session import install_portal_sessions
+    install_portal_sessions(app,security,serialize_session,current)
+
     @app.post("/logout")
-    def logout(user=Depends(current)):
+    def logout(request:Request,response:Response,user=Depends(current)):
+        name,secure=app.state.portal_cookie_settings(request)
+        response.delete_cookie(name,path='/',secure=secure,httponly=True,samesite='strict')
         repo.update_user(user.id, token_version=user.token_version + 1)
         return {"signed_out":True}
 

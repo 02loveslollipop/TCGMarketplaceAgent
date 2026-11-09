@@ -1,3 +1,4 @@
+import {settingsInputAttributes} from './inputSemantics';
 import {useEffect,useId,useRef,useState} from 'react';
 import {Alert,Box,Button,Container,Header,ExpandableSection,FormField,Input,Modal,SpaceBetween,Table} from '@cloudscape-design/components';
 import {startAuthentication,startRegistration,WebAuthnAbortService} from '@simplewebauthn/browser';
@@ -105,7 +106,7 @@ export function WebAuthnSettings({token,onChange,embedded=false}:{token:string;o
     </SpaceBetween></Box>}>
       {discard?<Box>Your authenticator setup details will be discarded.</Box>:<form id={registrationForm} onSubmit={event=>{event.preventDefault();void enroll();}}><SpaceBetween size="l">
         <Box>Name your authenticator, then use your browser’s chooser to create a passkey in your password manager or register a physical security key. After registration, sign in again to continue.</Box>
-        <FormField label="Authenticator name" description="For example, Google Password Manager or Physical security key."><Input ref={nameInput} data-testid="webauthn-name-input" value={name} disabled={busy} onChange={({detail})=>setName(detail.value)}/></FormField>
+        <FormField label="Authenticator name" description="For example, Google Password Manager or Physical security key."><Input ref={nameInput} data-testid="webauthn-name-input" name="authenticator-display-name" nativeInputAttributes={settingsInputAttributes} autoComplete="off" value={name} disabled={busy} onChange={({detail})=>setName(detail.value)}/></FormField>
         {busy&&<Button data-testid="webauthn-enroll-cancel-button" formAction="none" onClick={()=>{cancelled.current=true;WebAuthnAbortService.cancelCeremony();}}>Cancel authenticator</Button>}
         {error&&<Alert type="error">{error}</Alert>}
       </SpaceBetween></form>}

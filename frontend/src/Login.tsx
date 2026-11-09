@@ -89,12 +89,12 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
                 <Form actions={(!challenge||method==='totp')?<Button data-testid="login-submit-button" variant="primary" formAction="submit" loading={busy} disabled={busy||(challenge?!code.trim():!username.trim()||!password)}>Sign in</Button>:undefined}>
                   <SpaceBetween size="l">
                     {!challenge?<>
-                      <FormField label="Username"><Input data-testid="login-username-input" autoComplete="username" value={username} disabled={busy} onChange={({detail})=>setUsername(detail.value)}/></FormField>
-                      <FormField label="Password"><Input data-testid="login-password-input" type="password" autoComplete="current-password" value={password} disabled={busy} onChange={({detail})=>setPassword(detail.value)}/></FormField>
+                      <FormField label="Username"><Input data-testid="login-username-input" name="username" autoComplete="username" value={username} disabled={busy} onChange={({detail})=>setUsername(detail.value)}/></FormField>
+                      <FormField label="Password"><Input data-testid="login-password-input" name="password" type="password" autoComplete="current-password" value={password} disabled={busy} onChange={({detail})=>setPassword(detail.value)}/></FormField>
                     </>:<>
                       <FormField label="Verification method"><RadioGroup value={method} onChange={({detail})=>{setMethod(detail.value);setCode('');setError('');}} items={methods.filter(value=>value==='totp'||value==='webauthn').map(value=>({value,disabled:busy,label:value==='totp'?'Authenticator app':'Passkey or security key'}))}/></FormField>
                       {method==='webauthn'&&<WebAuthnLogin challengeToken={challenge} disabled={busy} onBusy={setBusy} onAuthenticated={complete}/>}
-                      {method==='totp'&&<FormField label="Authenticator code" description="Enter the code from your authenticator app."><Input data-testid="login-totp-input" autoComplete="one-time-code" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField>}
+                      {method==='totp'&&<FormField label="Authenticator code" description="Enter the code from your authenticator app."><Input data-testid="login-totp-input" name="authenticator-code" inputMode="numeric" autoComplete="one-time-code" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField>}
                     </>}
                     {error&&<Alert type="error" header="Unable to sign in">{error}</Alert>}
                   </SpaceBetween>

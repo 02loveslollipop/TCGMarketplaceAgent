@@ -14,7 +14,7 @@ export function apiUrl(path: string): string {
 }
 
 export async function api<T>(path:string, token:string, options:RequestInit={}):Promise<T> {
-  const response=await fetch(apiUrl(path),{...options,headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});
+  const response=await fetch(apiUrl(path),{...options,...(path.startsWith('/api/auth/')?{credentials:'include' as const}:{}),headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});
   if(!response.ok) {
     const body=await response.json().catch(()=>({}));
     throw new Error(body.error?.message || `Request failed (${response.status}).`);
@@ -54,3 +54,8 @@ export async function stream(path:string, token:string, body:unknown, receive:(e
 }
 
 export const safeHref=(url:string)=>url.startsWith('https://')?url:undefined;
+
+export function portalUrl(portal:'chat'|'admin') {
+  return portal==='chat'?(import.meta.env.VITE_CHAT_WEB_URL||'/'):(import.meta.env.VITE_ADMIN_WEB_URL||'/admin/');
+}
+export function redirectToChat(){window.location.replace(portalUrl('chat'));}
