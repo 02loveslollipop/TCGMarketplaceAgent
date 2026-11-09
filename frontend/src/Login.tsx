@@ -7,7 +7,6 @@ import {WebAuthnLogin} from './WebAuthn';
 import {Onboarding} from './Onboarding';
 import {RecoveryLogin} from './Recovery';
 import './login.css';
-import {ThemePicker} from './ThemePicker';
 
 type LoginResult={access_token?:string;challenge_token?:string;methods?:string[];enrollment_token?:string;recovery_reset?:boolean};
 const recoveryHash='#account-recovery';
@@ -105,7 +104,6 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
           {challenge&&methods.includes('recovery')&&!enrollment&&<Box textAlign="center"><Link color="inverted" data-testid="account-recovery-link" href={recoveryHash} onFollow={event=>{event.preventDefault();if(!busy)navigateRecovery(true);}}>Can't use your authenticator?</Link></Box>}
         </>}
         {!enrollment&&(challenge||recoveryRoute)&&<Box textAlign="center"><Link color="inverted" data-testid="login-back-link" href="#" onFollow={event=>{event.preventDefault();if(!busy){if(recoveryPage)navigateRecovery(false);else restart();}}}><Icon name="arrow-left"/> {recoveryPage?'Back to verification':'Back to sign in'}</Link></Box>}
-        <div className="login-theme-picker"><ThemePicker/></div>
       </SpaceBetween></div>
     </ContentLayout>
   </main>;

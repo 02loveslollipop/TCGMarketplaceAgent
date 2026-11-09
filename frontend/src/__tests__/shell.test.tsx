@@ -2,12 +2,13 @@ import {render,screen,within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,expect,it,vi} from 'vitest';
 import {Shell} from '../Shell';
+import {setAppearance} from '../appearance';
 
 vi.mock('../Login',()=>({Login:({onLogin}:{onLogin:(token:string,user:unknown)=>void})=><button onClick={()=>onLogin('test-token',{id:'test',username:'fixture-user',role:'admin',totp_enrolled:true,webauthn_enrolled:true,webauthn_credentials_count:1})}>Fixture sign in</button>}));
 vi.mock('../TotpSettings',()=>({TotpSettings:()=> <div>Authenticator settings fixture</div>}));
 vi.mock('../WebAuthn',()=>({WebAuthnSettings:()=> <div>Passkeys fixture</div>}));
 vi.mock('../Recovery',()=>({RecoverySettings:()=> <div>Recovery fixture</div>}));
-afterEach(()=>{vi.unstubAllGlobals();window.location.hash='';});
+afterEach(()=>{vi.unstubAllGlobals();window.location.hash='';setAppearance('light');});
 const json=(value:unknown)=>new Response(JSON.stringify(value));
 
 it('moves security to a dedicated page while preserving the chat draft and chosen model',async()=>{
@@ -33,4 +34,22 @@ it('navigates from the administration overview to models and accounts',async()=>
   expect(screen.getByRole('heading',{name:'Model policies',level:1})).toBeInTheDocument();
   await user.click(screen.getByRole('link',{name:'Accounts'}));
   expect(screen.getByRole('heading',{name:'Accounts',level:1})).toBeInTheDocument();
+});
+
+it('changes appearance from the top bar and keeps it after signing out',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>json([])));
+  const user=userEvent.setup();render(<Shell admin/>);
+  await user.click(screen.getByRole('button',{name:'Fixture sign in'}));
+  for(const label of ['Dark','Dark blue','Light','Dark blue']){
+    await user.click(screen.getByRole('button',{name:/Appearance:/}));
+    await user.click(screen.getByRole('menuitem',{name:label}));
+    const value=label.toLowerCase().replace(' ','-');
+    expect(document.body.dataset.colorTheme).toBe(value);
+    expect(localStorage.getItem('tcg-marketplace-appearance')).toBe(value);
+  }
+  await user.click(screen.getByRole('button',{name:'fixture-user'}));
+  await user.click(screen.getByRole('menuitem',{name:'Sign out'}));
+  expect(await screen.findByRole('button',{name:'Fixture sign in'})).toBeInTheDocument();
+  expect(screen.queryByRole('button',{name:/Appearance:/})).not.toBeInTheDocument();
+  expect(document.body.dataset.colorTheme).toBe('dark-blue');
 });

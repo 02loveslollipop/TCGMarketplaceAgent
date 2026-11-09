@@ -29,5 +29,3 @@
 @media (max-width: 600px) {
   .login-hero { padding-block: 32px 56px; }
 }
-
-.login-theme-picker { width: 180px; margin-inline: auto; }

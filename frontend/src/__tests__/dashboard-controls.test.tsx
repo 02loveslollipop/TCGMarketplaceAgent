@@ -5,10 +5,8 @@ import {RolePolicies} from '../RolePolicies';
 import {Admin} from '../Admin';
 import {TotpSettings} from '../TotpSettings';
 import {WebAuthnSettings} from '../WebAuthn';
-import {ThemePicker} from '../ThemePicker';
-import {setAppearance} from '../appearance';
 vi.mock('@simplewebauthn/browser',()=>({startAuthentication:vi.fn(),startRegistration:vi.fn(),WebAuthnAbortService:{cancelCeremony:vi.fn()}}));
-afterEach(()=>{vi.unstubAllGlobals();setAppearance('light');});
+afterEach(()=>vi.unstubAllGlobals());
 const json=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
 const policies=[{role:'user',daily_token_limit:50000,allowed_model_ids:null,reset_timezone:'Asia/Tokyo'},{role:'admin',daily_token_limit:200000,allowed_model_ids:null,reset_timezone:'Asia/Tokyo'}];
 const model={id:'fixture',label:'Fixture model',provider:'openai',api_id:'fixture',enabled:true};
@@ -76,16 +74,4 @@ it('opens a named passkey form beside the authenticator list and restores focus 
  expect(screen.getByTestId('webauthn-credentials-table')).toBeInTheDocument();expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
  await user.click(screen.getByRole('button',{name:'Cancel setup'}));await user.click(screen.getByRole('button',{name:'Discard setup'}));
  expect(screen.queryByLabelText('Authenticator name')).not.toBeInTheDocument();await waitFor(()=>expect(add).toHaveFocus());
-});
-
-it('switches between Light, Dark, and Dark blue and saves the selected appearance',async()=>{
- const user=userEvent.setup();render(<ThemePicker/>);
- const picker=screen.getByTestId('appearance-select');
- await user.click(within(picker).getByRole('button'));await user.click(screen.getByRole('option',{name:'Dark blue'}));
- expect(document.body).toHaveClass('awsui-dark-mode');expect(document.body.dataset.colorTheme).toBe('dark-blue');
- expect(localStorage.getItem('tcg-marketplace-appearance')).toBe('dark-blue');
- await user.click(within(picker).getByRole('button'));await user.click(screen.getByRole('option',{name:'Dark'}));
- expect(document.body.dataset.colorTheme).toBe('dark');
- await user.click(within(picker).getByRole('button'));await user.click(screen.getByRole('option',{name:'Light'}));
- expect(document.body).not.toHaveClass('awsui-dark-mode');expect(document.body.dataset.colorTheme).toBe('light');
 });
