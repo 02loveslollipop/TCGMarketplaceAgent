@@ -15,7 +15,7 @@ function ceremonyError(error:unknown):string {
   return problem.message||'Authenticator operation failed. Please try again.';
 }
 
-export function WebAuthnLogin({challengeToken,disabled,onAuthenticated,onBusy,onRestart}:{challengeToken:string;disabled:boolean;onAuthenticated:(result:AccessToken)=>Promise<void>;onBusy:(busy:boolean)=>void;onRestart:()=>void}) {
+export function WebAuthnLogin({challengeToken,disabled,onAuthenticated,onBusy}:{challengeToken:string;disabled:boolean;onAuthenticated:(result:AccessToken)=>Promise<void>;onBusy:(busy:boolean)=>void}) {
   const [busy,setBusy]=useState(false),[error,setError]=useState('');
   const ceremony=useRef<string|null>(null);
   const cancelled=useRef(false);
@@ -48,7 +48,6 @@ export function WebAuthnLogin({challengeToken,disabled,onAuthenticated,onBusy,on
     {error&&<Alert type="error">{error}</Alert>}
     <Button data-testid="webauthn-login-button" formAction="none" variant="primary" disabled={busy||disabled} loading={busy} onClick={()=>void authenticate()}>Use passkey or security key</Button>
     {busy&&<Button data-testid="webauthn-login-cancel-button" formAction="none" onClick={cancel}>Cancel authenticator</Button>}
-    {!busy&&<Button data-testid="webauthn-login-restart-button" formAction="none" onClick={onRestart}>Start sign-in again</Button>}
   </SpaceBetween>;
 }
 

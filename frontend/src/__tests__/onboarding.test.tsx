@@ -138,3 +138,24 @@ it('requires password verification when the recovery page is opened directly',as
   expect(screen.queryByLabelText('Recovery code')).not.toBeInTheDocument();
   expect(onLogin).not.toHaveBeenCalled();
 });
+
+it('places back navigation in the footer for either verification method and clears the password challenge',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>json({challenge_token:'proof',methods:['totp','webauthn','recovery']})));
+  const user=userEvent.setup(),onLogin=vi.fn();render(<Login onLogin={onLogin}/>);
+  expect(screen.queryByText('Sign in with your private PoC account.')).not.toBeInTheDocument();
+  expect(screen.queryByRole('link',{name:'Back to sign in'})).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText('Username'),'fixture');await user.type(screen.getByLabelText('Password'),'fixture-password');await user.click(screen.getByRole('button',{name:'Sign in'}));
+  await user.type(await screen.findByLabelText('Authenticator code'),'123456');
+  const back=screen.getByRole('link',{name:'Back to sign in'});
+  expect(screen.getByTestId('login-form').compareDocumentPosition(back)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  expect(screen.queryByText('Start sign-in again')).not.toBeInTheDocument();
+  await user.click(screen.getByRole('radio',{name:'Passkey or security key'}));
+  expect(screen.queryByText('Start sign-in again')).not.toBeInTheDocument();
+  expect(screen.getByRole('link',{name:'Back to sign in'})).toBeInTheDocument();
+  await user.click(screen.getByRole('link',{name:'Back to sign in'}));
+  expect(screen.getByLabelText('Username')).toHaveValue('fixture');
+  expect(screen.getByLabelText('Password')).toHaveValue('');
+  expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+  expect(screen.queryByRole('link',{name:"Can't use your authenticator?"})).not.toBeInTheDocument();
+  expect(onLogin).not.toHaveBeenCalled();
+});

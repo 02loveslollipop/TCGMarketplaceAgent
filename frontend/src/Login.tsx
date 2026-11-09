@@ -1,6 +1,6 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
-import {Alert,Box,Button,Container,ContentLayout,Form,FormField,Header,Input,Link,RadioGroup,SpaceBetween} from '@cloudscape-design/components';
-import {colorBackgroundHomeHeader,colorTextHomeHeaderDefault,colorBackgroundLayoutMain,colorTextBodyDefault,fontFamilyBase,fontSizeBodyM,lineHeightBodyM} from '@cloudscape-design/design-tokens';
+import {Alert,Box,Button,Container,ContentLayout,Form,FormField,Header,Icon,Input,Link,RadioGroup,SpaceBetween} from '@cloudscape-design/components';
+import {colorTextHomeHeaderDefault,colorBackgroundLayoutMain,colorTextBodyDefault,fontFamilyBase,fontSizeBodyM,lineHeightBodyM} from '@cloudscape-design/design-tokens';
 import {api,apiUrl} from './client';
 import type {Session} from './contracts';
 import {WebAuthnLogin} from './WebAuthn';
@@ -35,7 +35,7 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
     if(replace)window.history.replaceState(null,'',url);else window.history.pushState(null,'',url);
     setRecoveryRoute(recovery);setCode('');setError('');
   }
-  function restart(){setChallenge('');setMethods([]);setCode('');setError('');navigateRecovery(false,true);}
+  function restart(){setPassword('');setChallenge('');setMethods([]);setCode('');setError('');navigateRecovery(false,true);}
   async function complete(result:LoginResult) {
     setPassword('');
     if(result.enrollment_token){setChallenge('');setCode('');setRecovering(!!result.recovery_reset);setEnrollment(result.enrollment_token);return;}
@@ -61,10 +61,16 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
   }
   const pageHeading=useRef<HTMLSpanElement>(null);
   const recoveryPage=recoveryRoute&&!!challenge&&methods.includes('recovery')&&!enrollment;
-  useEffect(()=>{if(challenge)pageHeading.current?.focus();},[recoveryPage,!!challenge]);
+  useEffect(()=>{pageHeading.current?.focus();},[recoveryPage,!!challenge]);
   const title=challenge?'Verify your sign-in':recoveryRoute?'Sign in to recover':'Sign in';
   return <main className="login-page">
-    <ContentLayout defaultPadding headerVariant="high-contrast" maxContentWidth={500} headerBackgroundStyle={colorBackgroundHomeHeader} header={
+    <svg className="login-background-graph" viewBox="0 0 900 900" fill="none" preserveAspectRatio="xMidYMid slice" aria-hidden="true" focusable="false">
+      <g stroke="currentColor" strokeWidth="2">
+        <path d="M100 160 360 240 640 130 810 350 620 540 760 760 430 700 170 790 100 530 360 460 360 240M100 160 100 530M360 240 620 540 430 700 360 460 100 530M640 130 620 540M360 460 810 350M170 790 430 700"/>
+        {[[100,160],[360,240],[640,130],[810,350],[620,540],[760,760],[430,700],[170,790],[100,530],[360,460]].map(([cx,cy])=><circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="15"/>)}
+      </g>
+    </svg>
+    <ContentLayout defaultPadding headerVariant="high-contrast" maxContentWidth={500} headerBackgroundStyle="transparent" header={
       <div className="login-hero" style={{color:colorTextHomeHeaderDefault}}>
         <Box variant="h1" fontSize="display-l" fontWeight="bold" padding="n" textAlign="center">Pokémon TCG</Box>
         <Box variant="p" fontSize="heading-m" textAlign="center">Build your deck through conversation.</Box>
@@ -76,7 +82,6 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
           <Container header={<Header variant="h2" description={`Password verified for ${username}. Use a saved recovery code to reset your two-factor authentication.`}><span ref={pageHeading} tabIndex={-1}>Recover account</span></Header>}>
             <RecoveryLogin inline onBusy={setBusy} challengeToken={challenge} onAuthenticated={complete}/>
           </Container>
-          <Box textAlign="center"><Link href="#" onFollow={event=>{event.preventDefault();if(!busy)navigateRecovery(false);}}>Back to verification</Link></Box>
         </>:<>
           <Container header={!enrollment?<Header variant="h2" description={challenge?`Password verified for ${username}. Choose a verification method.`:recoveryRoute?'Verify your password before recovering your account.':'Enter your account credentials to continue.'}><span ref={pageHeading} tabIndex={-1}>{title}</span></Header>:undefined}>
             {enrollment?<Onboarding recovery={recovering} token={enrollment} onFinish={()=>{setEnrollment('');restart();}}/>:
@@ -88,18 +93,17 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
                       <FormField label="Password"><Input data-testid="login-password-input" type="password" autoComplete="current-password" value={password} disabled={busy} onChange={({detail})=>setPassword(detail.value)}/></FormField>
                     </>:<>
                       <FormField label="Verification method"><RadioGroup value={method} onChange={({detail})=>{setMethod(detail.value);setCode('');setError('');}} items={methods.filter(value=>value==='totp'||value==='webauthn').map(value=>({value,disabled:busy,label:value==='totp'?'Authenticator app':'Passkey or security key'}))}/></FormField>
-                      {method==='webauthn'&&<WebAuthnLogin challengeToken={challenge} disabled={busy} onBusy={setBusy} onAuthenticated={complete} onRestart={restart}/>}
+                      {method==='webauthn'&&<WebAuthnLogin challengeToken={challenge} disabled={busy} onBusy={setBusy} onAuthenticated={complete}/>}
                       {method==='totp'&&<FormField label="Authenticator code" description="Enter the code from your authenticator app."><Input data-testid="login-totp-input" autoComplete="one-time-code" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField>}
-                      {method!=='webauthn'&&<Button formAction="none" variant="link" disabled={busy} onClick={restart}>Start sign-in again</Button>}
                     </>}
                     {error&&<Alert type="error" header="Unable to sign in">{error}</Alert>}
                   </SpaceBetween>
                 </Form>
               </form>}
           </Container>
-          {challenge&&methods.includes('recovery')&&!enrollment&&<Box textAlign="center"><Link data-testid="account-recovery-link" href={recoveryHash} onFollow={event=>{event.preventDefault();if(!busy)navigateRecovery(true);}}>Can't use your authenticator?</Link></Box>}
+          {challenge&&methods.includes('recovery')&&!enrollment&&<Box textAlign="center"><Link color="inverted" data-testid="account-recovery-link" href={recoveryHash} onFollow={event=>{event.preventDefault();if(!busy)navigateRecovery(true);}}>Can't use your authenticator?</Link></Box>}
         </>}
-        <Box textAlign="center" color="text-body-secondary">Sign in with your private PoC account.</Box>
+        {!enrollment&&(challenge||recoveryRoute)&&<Box textAlign="center"><Link color="inverted" data-testid="login-back-link" href="#" onFollow={event=>{event.preventDefault();if(!busy){if(recoveryPage)navigateRecovery(false);else restart();}}}><Icon name="arrow-left"/> {recoveryPage?'Back to verification':'Back to sign in'}</Link></Box>}
       </SpaceBetween></div>
     </ContentLayout>
   </main>;
