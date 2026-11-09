@@ -1,3 +1,4 @@
+export interface ImageContext {name:string;media_type:string;data_url:string}
 export interface Source { url: string; title: string; retrieved_at: string; excerpt?: string }
 export interface Card { card_id: string; name: string; quantity: number; set_name: string; number: string; condition: string; language: string; printing: string; image_url?: string|null }
 export interface Offer { id: string; name: string; supplier: string; price: string; currency: string; quantity: number|null; availability: string; price_kind: string; number?: string|null; printing?: string|null; condition?: string|null; language?: string|null; source: Source }
@@ -12,6 +13,8 @@ export interface Session { id: string; username: string; role: string; totp_enro
 export interface Result { plan: { cards: Card[]; format: string; sources: Source[]; explanation: string }; legality: Legality; offers: Offer[]; budgets: Budget[]; missing: Missing[]; supplier_errors: {supplier:string;message:string}[]; recommendation: string }
 export type AgentEvent =
   | {type:'execution';data:{id:string;conversation_id:string}}
+  | {type:'thinking';data:{id:string;status:'loading'|'complete'|'error';source:'provider_summary'|'approach_summary';summary:string}}
+  | {type:'tool';data:{id:string;name:string;status:'loading'|'complete'|'error';input:Record<string,string>;sources:{url:string;title:string}[];duration_ms?:number}}
   | {type:'progress';data:{step:string;message:string;limitations?:{supplier:string;message:string}[]}}
   | {type:'cards';data:{cards:Card[];sources:Source[];legality:Legality}}
   | {type:'question';data:Question}

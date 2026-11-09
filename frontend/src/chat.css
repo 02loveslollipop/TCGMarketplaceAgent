@@ -53,3 +53,10 @@
   .chat-starter-prompts { margin-block-start: 16px; }
   .chat-decision-dock { max-block-size: 32vh; }
 }
+
+.chat-thinking-trace { margin-inline-start: 36px; margin-block-start: 12px; }
+.chat-image-context { display: flex; flex-wrap: wrap; gap: 12px; }
+.chat-image-context figure { margin: 8px 0; max-inline-size: 160px; overflow-wrap: anywhere; }
+.chat-image-context img { max-inline-size: 100%; max-block-size: 140px; object-fit: contain; border-radius: 6px; }
+.chat-image-context figcaption { font-size: 0.875em; }
+@media (max-width: 688px) { .chat-thinking-trace { margin-inline-start: 0; } }

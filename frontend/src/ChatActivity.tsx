@@ -1,7 +1,7 @@
 import {Box,ExpandableSection,Steps,StatusIndicator} from '@cloudscape-design/components';
-import type {AgentEvent,Decision,Question} from './contracts';
+import type {AgentEvent,Decision,Question,ImageContext} from './contracts';
 
-export type ChatEvent=AgentEvent|{type:'user';data:{text:string;decision?:Decision}}|{type:'stopped';data:{message:string}};
+export type ChatEvent=AgentEvent|{type:'user';data:{text:string;decision?:Decision;images?:ImageContext[]}}|{type:'stopped';data:{message:string}};
 export type ChatEntry=ChatEvent&{id:string;at?:string};
 export function decisionText(decision:Decision,question?:Question|null){
   const scope=question?.missing?.map(card=>`${card.quantity} × ${card.name}${card.number?` #${card.number}`:''}${[card.set_name,card.language,card.condition,card.printing].filter(Boolean).length?` (${[card.set_name,card.language,card.condition,card.printing].filter(Boolean).join(' · ')})`:''}`).join(', ');

@@ -44,7 +44,7 @@ export async function stream(path:string, token:string, body:unknown, receive:(e
         const lines=frame.split('\n');
         const type=lines.find(line=>line.startsWith('event:'))?.slice(6).trim();
         const data=lines.filter(line=>line.startsWith('data:')).map(line=>line.slice(5).trimStart()).join('\n');
-        if(type&&data&&['execution','progress','cards','question','result','error','done'].includes(type)) {
+        if(type&&data&&['execution','progress','thinking','tool','cards','question','result','error','done'].includes(type)) {
           const parsed:unknown=JSON.parse(data);
           if(parsed&&typeof parsed==='object') receive({type,data:parsed} as AgentEvent);
         }

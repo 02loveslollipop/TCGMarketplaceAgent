@@ -119,3 +119,73 @@ it.each([
   await user.click(screen.getByRole('button',{name:'Edit and reuse request'}));
   expect(screen.getByRole('textbox',{name:'Purchase request'})).toHaveValue('Research a deck');
 });
+
+it('pastes image context, removes previews and submits real image data with an image-only request',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>defaults(path)));
+  const user=userEvent.setup();render(<Chat token="fixture"/>);await screen.findByText('Test model');
+  const file=new File([new Uint8Array([137,80,78,71])],'cards.png',{type:'image/png'});
+  fireEvent.paste(screen.getByRole('textbox',{name:'Purchase request'}),{clipboardData:{files:[file]}});
+  const remove=await screen.findByRole('button',{name:'Remove cards.png'});await user.click(remove);
+  expect(screen.queryByRole('button',{name:'Remove cards.png'})).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'Send request'})).toBeDisabled();
+  fireEvent.paste(screen.getByRole('textbox',{name:'Purchase request'}),{clipboardData:{files:[file]}});
+  await screen.findByRole('button',{name:'Remove cards.png'});
+  await user.click(screen.getByRole('button',{name:'Send request'}));
+  const call=vi.mocked(fetch).mock.calls.find(call=>String(call[0]).endsWith('/executions'))!;
+  expect(JSON.parse(String(call[1]?.body))).toMatchObject({text:'',images:[{name:'cards.png',media_type:'image/png',data_url:'data:image/png;base64,iVBORw=='}]});
+  expect(screen.getByRole('img',{name:'Image context: cards.png'})).toBeInTheDocument();
+  await user.click(await screen.findByRole('button',{name:'Edit and reuse request'}));
+  expect(await screen.findByRole('button',{name:'Remove cards.png'})).toBeInTheDocument();
+});
+
+it('rejects unsupported, oversized and excess image attachments before making a model request',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>defaults(path)));
+  render(<Chat token="fixture"/>);await screen.findByText('Test model');
+  const prompt=screen.getByRole('textbox',{name:'Purchase request'});
+  fireEvent.paste(prompt,{clipboardData:{files:[new File(['<svg/>'],'test.svg',{type:'image/svg+xml'})]}});
+  expect(await screen.findByText('Use PNG, JPEG or WebP images.')).toBeInTheDocument();
+  fireEvent.paste(prompt,{clipboardData:{files:[new File([new Uint8Array(2*1024*1024+1)],'huge.png',{type:'image/png'})]}});
+  expect(await screen.findByText('Each image must be at most 2 MiB.')).toBeInTheDocument();
+  fireEvent.paste(prompt,{clipboardData:{files:Array.from({length:4},()=>new File(['x'],'test.png',{type:'image/png'}))}});
+  expect(await screen.findByText('Attach up to 3 images per request.')).toBeInTheDocument();
+  expect(vi.mocked(fetch).mock.calls.some(call=>call[1]?.method==='POST')).toBe(false);
+});
+
+it('shows collapsed provider reasoning and complete tool calls and restores their saved history',async()=>{
+  const thought={type:'thinking',data:{id:'reasoning-1',source:'provider_summary',status:'complete',summary:'Compare the verified printings first.'}} as const;
+  const tool:Extract<AgentEvent,{type:'tool'}>={type:'tool',data:{id:'tool-1',name:'search_cards',status:'complete',input:{name:'Lucario'},sources:[{url:'https://example.com/cards',title:'Verified card source'}],duration_ms:200}};
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
+    if(path.endsWith('/conversations'))return json([{id:'trace',title:'Saved research trace'}]);
+    if(path.endsWith('/conversations/trace'))return json([{role:'user',content:{text:'Find Lucario'}},{role:'assistant',content:thought},{role:'assistant',content:tool},{role:'assistant',content:{type:'result',data:result}}]);
+    if(path.endsWith('/executions'))return sse([{...thought,data:{...thought.data,status:'loading',summary:'Compare'}},thought,tool,{type:'result',data:result},completed]);
+    return defaults(path);
+  }));
+  const user=userEvent.setup();render(<Chat token="fixture"/>);await screen.findByText('Test model');
+  await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'Find cards');await user.click(screen.getByRole('button',{name:'Send request'}));
+  const expand=await screen.findByRole('button',{name:'Completed thinking'});
+  expect(expand).toHaveAttribute('aria-expanded','false');await user.click(expand);
+  expect(screen.getAllByText('Compare the verified printings first.')).toHaveLength(1);
+  expect(screen.getByRole('link',{name:/Verified card source/})).toHaveAttribute('href','https://example.com/cards');
+  await user.click(screen.getByRole('button',{name:'Saved research trace'}));
+  await user.click(await screen.findByRole('button',{name:'Completed thinking'}));
+  expect(screen.getAllByText('Compare the verified printings first.')).toHaveLength(1);
+  expect(screen.getByRole('list',{name:'Tool call search_cards'})).toBeInTheDocument();
+});
+
+it('keeps reasoning updates scoped to their own request and labels unfinished summaries as interrupted',async()=>{
+  let request=0;
+  const thought=(summary:string,status:'loading'|'complete'):AgentEvent=>({type:'thinking',data:{id:'provider-reused-id',source:'provider_summary',summary,status}});
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
+    if(path.endsWith('/executions'))return sse(request++===0?[thought('First completed summary','complete'),completed]:[thought('Second unfinished summary','loading'),{type:'error',data:{message:'Provider interrupted'}}]);
+    return defaults(path);
+  }));
+  const user=userEvent.setup();render(<Chat token="fixture"/>);await screen.findByText('Test model');
+  await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'First request');await user.click(screen.getByRole('button',{name:'Send request'}));
+  await screen.findByRole('button',{name:'Completed thinking'});
+  await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'Second request');await user.click(screen.getByRole('button',{name:'Send request'}));
+  await user.click(await screen.findByRole('button',{name:'Thinking interrupted'}));
+  await user.click(screen.getByRole('button',{name:'Completed thinking'}));
+  expect(screen.getByText('First completed summary')).toBeInTheDocument();
+  expect(screen.getByText('Second unfinished summary')).toBeInTheDocument();
+  expect(screen.getByText('Summary interrupted')).toBeInTheDocument();
+});
