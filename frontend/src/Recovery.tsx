@@ -1,5 +1,5 @@
 import {useEffect,useState} from 'react';
-import {Alert,Button,Checkbox,ExpandableSection,FormField,Header,Input,SpaceBetween} from '@cloudscape-design/components';
+import {Alert,Button,Checkbox,Container,ExpandableSection,FormField,Header,Input,SpaceBetween} from '@cloudscape-design/components';
 import {api} from './client';
 
 export function RecoveryCodes({codes,onFinish}:{codes:string[];onFinish:()=>void}) {
@@ -16,11 +16,11 @@ export function RecoverySettings({token,onFinish}:{token:string;onFinish:()=>voi
   const [remaining,setRemaining]=useState<number>(),[password,setPassword]=useState(''),[codes,setCodes]=useState<string[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState('');
   useEffect(()=>{void api<{remaining:number}>('/api/auth/recovery/status',token).then(value=>setRemaining(value.remaining)).catch(error=>setError(error.message));},[token]);
   async function generate(){if(busy||!password)return;setBusy(true);setError('');try{const result=await api<{recovery_codes:string[]}>('/api/auth/recovery/regenerate',token,{method:'POST',body:JSON.stringify({password})});setCodes(result.recovery_codes);}catch(error){setError((error as Error).message);}finally{setPassword('');setBusy(false);}}
-  return <ExpandableSection headerText="Recovery codes">{codes.length?<RecoveryCodes codes={codes} onFinish={()=>{setCodes([]);onFinish();}}/>:<SpaceBetween size="m">
+  return <Container data-testid="recovery-settings-section" header={<Header variant="h2" description="Manage the codes used to recover access to your account.">Recovery codes</Header>}>{codes.length?<RecoveryCodes codes={codes} onFinish={()=>{setCodes([]);onFinish();}}/>:<SpaceBetween size="m">
     <Alert type="info">{remaining===undefined?'Checking recovery codes…':`${remaining} recovery codes remaining.`} Generating a new set invalidates all previous codes and signs you out.</Alert>
     <FormField label="Current password"><Input data-testid="recovery-current-password" type="password" autoComplete="current-password" value={password} disabled={busy} onChange={({detail})=>setPassword(detail.value)}/></FormField>
     <Button data-testid="recovery-regenerate-button" loading={busy} disabled={busy||!password} onClick={()=>void generate()}>Generate new recovery codes</Button>
-    {error&&<Alert type="error">{error}</Alert>}</SpaceBetween>}</ExpandableSection>;
+    {error&&<Alert type="error">{error}</Alert>}</SpaceBetween>}</Container>;
 }
 
 export function RecoveryLogin({challengeToken,onAuthenticated,expanded=false,onBusy,inline=false}:{inline?:boolean;expanded?:boolean;onBusy?:(busy:boolean)=>void;challengeToken:string;onAuthenticated:(result:{enrollment_token:string;recovery_reset?:boolean})=>Promise<void>}) {

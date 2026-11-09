@@ -55,7 +55,9 @@ it('downloads codes and requires the current password for regeneration',async()=
   vi.stubGlobal('fetch',vi.fn(async(path:string)=>path.endsWith('/status')?json({remaining:2}):json({recovery_codes:['new-code']})));
   const create=vi.fn(()=> 'blob:test'),revoke=vi.fn();vi.stubGlobal('URL',Object.assign(URL,{createObjectURL:create,revokeObjectURL:revoke}));vi.spyOn(HTMLAnchorElement.prototype,'click').mockImplementation(()=>{});
   const user=userEvent.setup();render(<RecoverySettings token="full" onFinish={()=>{}}/>);
-  await user.click(screen.getByRole('button',{name:'Recovery codes'}));expect(screen.getByRole('button',{name:'Generate new recovery codes'})).toBeDisabled();
+  expect(screen.getByRole('heading',{name:'Recovery codes'})).toBeInTheDocument();
+  expect(screen.getByLabelText('Current password')).toBeVisible();
+  expect(screen.getByRole('button',{name:'Generate new recovery codes'})).toBeDisabled();
   await user.type(screen.getByLabelText('Current password'),'password');await user.click(screen.getByRole('button',{name:'Generate new recovery codes'}));
   expect(await screen.findByText('new-code')).toBeInTheDocument();await user.click(screen.getByRole('button',{name:'Download recovery codes'}));expect(create).toHaveBeenCalledOnce();expect(revoke).toHaveBeenCalledWith('blob:test');
   const call=vi.mocked(fetch).mock.calls.find(call=>String(call[0]).endsWith('/regenerate'))!;expect(JSON.parse(String(call[1]?.body))).toEqual({password:'password'});
