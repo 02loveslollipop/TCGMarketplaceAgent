@@ -62,11 +62,11 @@ it('downloads codes and requires the current password for regeneration',async()=
 });
 
 it('submits a recovery code with the password challenge and handles rejection',async()=>{
-  vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(json({error:{message:'Invalid code'}},401)).mockResolvedValueOnce(json({access_token:'verified'})));
+  vi.stubGlobal('fetch',vi.fn().mockResolvedValueOnce(json({error:{message:'Invalid code'}},401)).mockResolvedValueOnce(json({enrollment_token:'reset-only',recovery_reset:true})));
   const user=userEvent.setup(),authenticated=vi.fn().mockResolvedValue(undefined);render(<RecoveryLogin challengeToken="proof" onAuthenticated={authenticated}/>);
   await user.click(screen.getByRole('button',{name:'Use a recovery code'}));await user.type(screen.getByLabelText('Recovery code'),'bad');await user.click(screen.getByRole('button',{name:'Use recovery code'}));
   expect(await screen.findByText('Invalid code')).toBeInTheDocument();expect(authenticated).not.toHaveBeenCalled();
-  await user.type(screen.getByLabelText('Recovery code'),'good');await user.click(screen.getByRole('button',{name:'Use recovery code'}));await waitFor(()=>expect(authenticated).toHaveBeenCalledWith({access_token:'verified'}));
+  await user.type(screen.getByLabelText('Recovery code'),'good');await user.click(screen.getByRole('button',{name:'Use recovery code'}));await waitFor(()=>expect(authenticated).toHaveBeenCalledWith({enrollment_token:'reset-only',recovery_reset:true}));
 });
 
 
@@ -79,4 +79,21 @@ it('shows a QR code and manual fallback when adding an authenticator in settings
   expect(screen.queryByLabelText('Setup key')).not.toBeInTheDocument();
   await user.click(screen.getByRole('button',{name: /Can't scan the QR code/}));
   expect(screen.getByLabelText('Setup key')).toHaveValue('settings-key');
+});
+
+it('switches verification methods and restricts recovery to new-factor enrollment',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async(path:string)=>path.endsWith('/token')?json({challenge_token:'password-proof',methods:['webauthn','totp','recovery']}):path.endsWith('/recovery/challenge')?json({requires_enrollment:true,recovery_reset:true,enrollment_token:'restricted-reset'}):json({})));
+  const user=userEvent.setup(),onLogin=vi.fn();render(<Login onLogin={onLogin}/>);
+  await user.type(screen.getByLabelText('Username'),'fixture');await user.type(screen.getByLabelText('Password'),'fixture-password');await user.click(screen.getByRole('button',{name:'Sign in'}));
+  await user.type(await screen.findByLabelText('Authenticator code'),'123456');
+  await user.click(screen.getByRole('radio',{name:'Passkey or security key'}));
+  expect(screen.queryByLabelText('Authenticator code')).not.toBeInTheDocument();
+  expect(screen.getByRole('button',{name:'Use passkey or security key'})).toBeInTheDocument();
+  await user.click(screen.getByRole('radio',{name:'Authenticator app'}));
+  expect(screen.getByLabelText('Authenticator code')).toHaveValue('');
+  await user.click(screen.getByRole('radio',{name:/Recover account/}));
+  await user.type(screen.getByLabelText('Recovery code'),'fixture-code');await user.click(screen.getByRole('button',{name:'Use recovery code'}));
+  expect(await screen.findByRole('heading',{name:'Secure your recovered account'})).toBeInTheDocument();
+  expect(onLogin).not.toHaveBeenCalled();
+  expect(vi.mocked(fetch).mock.calls.some(call=>String(call[0]).endsWith('/session'))).toBe(false);
 });

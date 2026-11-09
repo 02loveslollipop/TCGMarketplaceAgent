@@ -9,10 +9,10 @@ from argon2.exceptions import InvalidHashError, VerificationError
 from cryptography.fernet import Fernet
 import jwt
 import pyotp
-from sqlalchemy import select, delete
+from sqlalchemy import select, delete, update
 
 from shared.contracts import utcnow
-from shared.db import Challenge, User, EnrollmentState, RecoveryCode, WebAuthnCredential
+from shared.db import Challenge, User, EnrollmentState, RecoveryCode, WebAuthnCredential, WebAuthnChallenge
 
 
 class AuthenticationError(Exception):
@@ -189,8 +189,17 @@ class Security:
             rows=list(session.scalars(select(RecoveryCode).where(RecoveryCode.user_id==user.id,RecoveryCode.consumed.is_(False)).with_for_update()))
             match=next((row for row in rows if verify_password(row.code_hash,normalized)),None)
             if match:
-                match.consumed=True;parent.consumed=True
-                result={"access_token":self.tokens.issue(stored),"token_type":"bearer","expires_in":900}
+                # Recovery resets the factors atomically; it never issues app access.
+                stored.totp_secret=None;stored.totp_pending=None;stored.totp_last_step=-1
+                stored.token_version+=1
+                session.execute(delete(WebAuthnCredential).where(WebAuthnCredential.user_id==stored.id))
+                session.execute(delete(RecoveryCode).where(RecoveryCode.user_id==stored.id))
+                session.execute(update(Challenge).where(Challenge.user_id==stored.id).values(consumed=True))
+                session.execute(update(WebAuthnChallenge).where(WebAuthnChallenge.user_id==stored.id).values(consumed=True))
+                enrollment=Challenge(user_id=stored.id,kind="enrollment",expires_at=utcnow()+timedelta(minutes=5))
+                session.add(enrollment);session.flush()
+                result={"requires_enrollment":True,"recovery_reset":True,
+                        "enrollment_token":self.tokens.issue(stored,"enrollment",enrollment.id)}
             else:failure=AuthenticationError("Invalid or already used recovery code.")
         if failure:raise failure
         return result

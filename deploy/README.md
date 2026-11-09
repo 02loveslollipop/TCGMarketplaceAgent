@@ -112,7 +112,11 @@ privately before finishing and signing in again. An existing account can add
 multiple named security keys and generate replacement recovery codes in its
 settings. Replacement requires the current password, invalidates earlier codes,
 and revokes existing sessions. A recovery code can be used once after the correct
-password and does not remove enrolled authenticators.
+password to recover the account. Recovery atomically removes all enrolled
+authenticators, invalidates existing sessions, pending challenges and all old
+recovery codes, and returns only a five-minute enrollment token. The account
+holder must confirm a new authenticator and save new recovery codes before
+signing in again. Recovery never directly grants access to chat or administration.
 
 WebAuthn works only in a secure context; browsers treat localhost specially. The
 default relying party ID is `localhost` and the origin is `http://localhost:8080`.

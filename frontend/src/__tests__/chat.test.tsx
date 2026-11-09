@@ -135,6 +135,7 @@ describe('Cloudscape chat',()=>{
     const onLogin=vi.fn(),user=userEvent.setup();render(<Login onLogin={onLogin}/>);
     await user.type(screen.getByLabelText('Username'),'one');await user.type(screen.getByLabelText('Password'),'long-password');await user.click(screen.getByRole('button',{name:'Sign in'}));
     await screen.findByLabelText('Authenticator code');expect(onLogin).not.toHaveBeenCalled();
+    await user.click(screen.getByRole('radio',{name:'Passkey or security key'}));
     await user.click(screen.getByRole('button',{name:'Use passkey or security key'}));
     await waitFor(()=>expect(onLogin).toHaveBeenCalledWith('verified-token',session));
     const call=vi.mocked(fetch).mock.calls.find(call=>String(call[0]).endsWith('/authentication/verify'))!;

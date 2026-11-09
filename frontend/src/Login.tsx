@@ -1,5 +1,5 @@
 import {useLayoutEffect,useState} from 'react';
-import {Alert,Box,Button,Container,Form,FormField,Header,Input,SpaceBetween} from '@cloudscape-design/components';
+import {Alert,Box,Button,Container,Form,FormField,Header,Input,RadioGroup,SpaceBetween} from '@cloudscape-design/components';
 import {colorBackgroundLayoutMain,colorTextBodyDefault,fontFamilyBase,fontSizeBodyM,lineHeightBodyM} from '@cloudscape-design/design-tokens';
 import {api,apiUrl} from './client';
 import type {Session} from './contracts';
@@ -21,17 +21,17 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
   const [username,setUsername]=useState(''),[password,setPassword]=useState(''),[code,setCode]=useState('');
   const [challenge,setChallenge]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false);
   const [methods,setMethods]=useState<string[]>([]);
-  const [enrollment,setEnrollment]=useState('');
-  async function complete(result:{access_token?:string;challenge_token?:string;methods?:string[];enrollment_token?:string}) {
+  const [enrollment,setEnrollment]=useState(''),[method,setMethod]=useState('totp'),[recovering,setRecovering]=useState(false);
+  async function complete(result:{access_token?:string;challenge_token?:string;methods?:string[];enrollment_token?:string;recovery_reset?:boolean}) {
     setPassword('');
-    if(result.enrollment_token){setEnrollment(result.enrollment_token);return;}
-    if(result.challenge_token){setMethods(result.methods||['totp']);setChallenge(result.challenge_token);return;}
+    if(result.enrollment_token){setChallenge('');setCode('');setRecovering(!!result.recovery_reset);setEnrollment(result.enrollment_token);return;}
+    if(result.challenge_token){setMethods(result.methods||['totp']);setMethod((result.methods||['totp']).includes('totp')?'totp':'webauthn');setChallenge(result.challenge_token);return;}
     if(!result.access_token)throw new Error('Authentication did not return a session.');
     const user=await api<Session>('/api/auth/session',result.access_token);
     onLogin(result.access_token,user);
   }
   async function submit() {
-    if(busy||(challenge?!methods.includes('totp')||!code.trim():!username.trim()||!password))return;
+    if(busy||(challenge?method!=='totp'||!code.trim():!username.trim()||!password))return;
     setBusy(true);setError('');
     try {
       let result:{access_token?:string;challenge_token?:string;methods?:string[]};
@@ -58,18 +58,20 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
     <section className="login-panel" aria-label="Sign in">
       <div className="login-card"><SpaceBetween size="l">
         {notice&&<Alert type="warning">{notice}</Alert>}
-        <Container header={!enrollment?<Header variant="h2">Sign in</Header>:undefined}>
-          {enrollment?<Onboarding token={enrollment} onFinish={()=>{setEnrollment('');setChallenge('');setMethods([]);setCode('');setError('');}}/>:<>
+        <Container header={!enrollment?<Header variant="h2" description={challenge?`Password verified for ${username}. Choose a verification method.`:'Enter your account credentials to continue.'}>{challenge?'Verify your sign-in':'Sign in'}</Header>:undefined}>
+          {enrollment?<Onboarding recovery={recovering} token={enrollment} onFinish={()=>{setEnrollment('');setChallenge('');setMethods([]);setCode('');setError('');}}/>:<>
           <form data-testid="login-form" onSubmit={event=>{event.preventDefault();void submit();}}>
-            <Form actions={(!challenge||methods.includes('totp'))?<Button data-testid="login-submit-button" variant="primary" formAction="submit" loading={busy} disabled={busy||(challenge?!code.trim():!username.trim()||!password)}>Sign in</Button>:undefined}>
+            <Form actions={(!challenge||method==='totp')?<Button data-testid="login-submit-button" variant="primary" formAction="submit" loading={busy} disabled={busy||(challenge?!code.trim():!username.trim()||!password)}>Sign in</Button>:undefined}>
               <SpaceBetween size="l">
                 {!challenge?<>
                   <FormField label="Username"><Input data-testid="login-username-input" autoComplete="username" value={username} disabled={busy} onChange={({detail})=>setUsername(detail.value)}/></FormField>
                   <FormField label="Password"><Input data-testid="login-password-input" type="password" autoComplete="current-password" value={password} disabled={busy} onChange={({detail})=>setPassword(detail.value)}/></FormField>
                 </>:<>
-                  {methods.includes('webauthn')&&<WebAuthnLogin challengeToken={challenge} disabled={busy} onBusy={setBusy} onAuthenticated={complete} onRestart={()=>{setChallenge('');setMethods([]);setCode('');setError('');}}/>}
-                  {methods.includes('totp')&&<FormField label="Authenticator code" description={methods.includes('webauthn')?'You can use your authenticator app instead.':undefined}><Input data-testid="login-totp-input" autoComplete="one-time-code" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField>}
-                  {methods.includes('recovery')&&<RecoveryLogin challengeToken={challenge} onAuthenticated={complete}/>}
+                  <FormField label="Verification method"><RadioGroup value={method} onChange={({detail})=>{setMethod(detail.value);setCode('');setError('');}} items={methods.map(value=>({value,disabled:busy,label:value==='totp'?'Authenticator app':value==='webauthn'?'Passkey or security key':'Recover account',description:value==='recovery'?'Reset all verification methods and set up a new one.':undefined}))}/></FormField>
+                  {method==='webauthn'&&<WebAuthnLogin challengeToken={challenge} disabled={busy} onBusy={setBusy} onAuthenticated={complete} onRestart={()=>{setChallenge('');setMethods([]);setCode('');setError('');}}/>}
+                  {method==='totp'&&<FormField label="Authenticator code" description={methods.includes('webauthn')?'You can use your authenticator app instead.':undefined}><Input data-testid="login-totp-input" autoComplete="one-time-code" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField>}
+                  {method==='recovery'&&<RecoveryLogin expanded onBusy={setBusy} challengeToken={challenge} onAuthenticated={complete}/>}
+                  {method!=='webauthn'&&<Button formAction="none" variant="link" disabled={busy} onClick={()=>{setChallenge('');setCode('');setError('');}}>Start sign-in again</Button>}
                 </>}
                 {error&&<Alert type="error" header="Unable to sign in">{error}</Alert>}
               </SpaceBetween>

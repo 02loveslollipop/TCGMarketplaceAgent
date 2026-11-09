@@ -5,7 +5,7 @@ import {api} from './client';
 export function RecoveryCodes({codes,onFinish}:{codes:string[];onFinish:()=>void}) {
   const [saved,setSaved]=useState(false);
   function download(){const url=URL.createObjectURL(new Blob([codes.join('\n')+'\n'],{type:'text/plain'}));const anchor=document.createElement('a');anchor.href=url;anchor.download='pokemon-tcg-recovery-codes.txt';anchor.click();URL.revokeObjectURL(url);}
-  return <SpaceBetween size="l"><Header variant="h2">Save your recovery codes</Header><Alert type="warning">These codes are shown once. Store them privately. Each code replaces your second factor once after your password.</Alert>
+  return <SpaceBetween size="l"><Header variant="h2">Save your recovery codes</Header><Alert type="warning">These codes are shown once. Store them privately. After your password, a recovery code resets all two-factor methods and requires a new authenticator. Recovery never grants direct access.</Alert>
     <div data-testid="recovery-codes-secret" aria-label="Recovery codes"><pre style={{whiteSpace:'pre-wrap',overflowWrap:'anywhere'}}>{codes.join('\n')}</pre></div>
     <Button data-testid="download-recovery-codes" onClick={download}>Download recovery codes</Button>
     <Checkbox data-testid="recovery-saved-checkbox" checked={saved} onChange={({detail})=>setSaved(detail.checked)}>I have saved these recovery codes</Checkbox>
@@ -23,8 +23,8 @@ export function RecoverySettings({token,onFinish}:{token:string;onFinish:()=>voi
     {error&&<Alert type="error">{error}</Alert>}</SpaceBetween>}</ExpandableSection>;
 }
 
-export function RecoveryLogin({challengeToken,onAuthenticated}:{challengeToken:string;onAuthenticated:(result:{access_token:string})=>Promise<void>}) {
+export function RecoveryLogin({challengeToken,onAuthenticated,expanded=false,onBusy}:{expanded?:boolean;onBusy?:(busy:boolean)=>void;challengeToken:string;onAuthenticated:(result:{enrollment_token:string;recovery_reset?:boolean})=>Promise<void>}) {
   const [code,setCode]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
-  async function submit(){if(busy||!code)return;setBusy(true);setError('');try{await onAuthenticated(await api('/api/auth/recovery/challenge','',{method:'POST',body:JSON.stringify({challenge_token:challengeToken,code})}));}catch(error){setError((error as Error).message);}finally{setCode('');setBusy(false);}}
-  return <ExpandableSection headerText="Use a recovery code"><SpaceBetween size="m"><FormField label="Recovery code"><Input data-testid="recovery-login-code" autoComplete="off" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField><Button data-testid="recovery-login-button" formAction="none" disabled={busy||!code} loading={busy} onClick={()=>void submit()}>Use recovery code</Button>{error&&<Alert type="error">{error}</Alert>}</SpaceBetween></ExpandableSection>;
+  async function submit(){if(busy||!code)return;setBusy(true);onBusy?.(true);setError('');try{await onAuthenticated(await api('/api/auth/recovery/challenge','',{method:'POST',body:JSON.stringify({challenge_token:challengeToken,code})}));}catch(error){setError((error as Error).message);}finally{setCode('');setBusy(false);onBusy?.(false);}}
+  return <ExpandableSection defaultExpanded={expanded} headerText="Use a recovery code"><SpaceBetween size="m"><Alert type="warning">Using a recovery code removes all enrolled authenticators, invalidates existing sessions and recovery codes, and requires a new authenticator before you can access the app.</Alert><FormField label="Recovery code"><Input data-testid="recovery-login-code" autoComplete="off" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField><Button data-testid="recovery-login-button" formAction="none" disabled={busy||!code} loading={busy} onClick={()=>void submit()}>Use recovery code</Button>{error&&<Alert type="error">{error}</Alert>}</SpaceBetween></ExpandableSection>;
 }

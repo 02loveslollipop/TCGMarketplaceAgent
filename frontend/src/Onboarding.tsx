@@ -5,7 +5,7 @@ import {api} from './client';
 import {RecoveryCodes} from './Recovery';
 import {TotpSetup} from './TotpSetup';
 
-export function Onboarding({token,onFinish}:{token:string;onFinish:()=>void}) {
+export function Onboarding({token,onFinish,recovery=false}:{token:string;onFinish:()=>void;recovery?:boolean}) {
   const [mode,setMode]=useState(''),[enrollment,setEnrollment]=useState<{secret:string;uri:string}|null>(null),[code,setCode]=useState(''),[name,setName]=useState(''),[codes,setCodes]=useState<string[]>([]),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const ceremony=useRef(''),cancelled=useRef(false);
   async function cancel(){cancelled.current=true;WebAuthnAbortService.cancelCeremony();const id=ceremony.current;ceremony.current='';if(id)await api(`/api/auth/onboarding/webauthn/challenges/${id}/cancel`,token,{method:'POST'});}
@@ -21,7 +21,7 @@ export function Onboarding({token,onFinish}:{token:string;onFinish:()=>void}) {
     completed(await api('/api/auth/onboarding/webauthn/registration/verify',token,{method:'POST',body:JSON.stringify({challenge_id:result.challenge_id,credential})}));ceremony.current='';
   }catch{try{await cancel();}catch{}setError('Authenticator setup was cancelled or could not be verified. Retry, or sign in again if setup expired.');}finally{setBusy(false);}}
   if(codes.length)return <RecoveryCodes codes={codes} onFinish={()=>{setCodes([]);onFinish();}}/>;
-  return <SpaceBetween size="l"><Header variant="h2">Set up two-factor authentication</Header><Alert type="info">Confirm an authenticator before accessing chat or administration. Setup expires after five minutes.</Alert>
+  return <SpaceBetween size="l"><Header variant="h2">{recovery?'Secure your recovered account':'Set up two-factor authentication'}</Header>{recovery&&<Alert type="warning">Your previous authenticators, sessions and recovery codes have been revoked. Set up a new authenticator and save the new recovery codes to restore access.</Alert>}<Alert type="info">Confirm an authenticator before accessing chat or administration. Setup expires after five minutes.</Alert>
     {!mode&&<><Button data-testid="onboarding-choose-totp" disabled={busy} onClick={()=>void beginTotp()}>Set up authenticator app</Button><Button data-testid="onboarding-choose-webauthn" disabled={busy} onClick={()=>setMode('webauthn')}>Set up passkey or security key</Button></>}
     {mode==='totp'&&<>{enrollment&&<TotpSetup {...enrollment}/>}<FormField label="Authenticator code"><Input data-testid="onboarding-totp-code" autoComplete="one-time-code" value={code} disabled={busy} onChange={({detail})=>setCode(detail.value)}/></FormField><Button data-testid="onboarding-confirm-totp" disabled={busy||!code} loading={busy} onClick={()=>void confirm()}>Confirm authenticator app</Button></>}
     {mode==='webauthn'&&<><FormField label="Authenticator name"><Input data-testid="onboarding-authenticator-name" value={name} disabled={busy} onChange={({detail})=>setName(detail.value)}/></FormField><Button data-testid="onboarding-register-key" disabled={busy||!name.trim()} loading={busy} onClick={()=>void register()}>Add passkey or security key</Button>{busy&&<Button data-testid="onboarding-cancel-key" onClick={()=>void cancel().catch(()=>setError('Cancellation could not be confirmed. Sign in again.'))}>Cancel authenticator</Button>}</>}

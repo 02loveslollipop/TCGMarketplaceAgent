@@ -49,9 +49,10 @@ def test_initial_limited_token_no_access_until_confirmed_and_plaintext_only_once
         assert all(code not in repr(row.__dict__) for row in rows for code in result['recovery_codes'])
     login=security.login(user.username,PASSWORD)
     verified=security.recover(login['challenge_token'],result['recovery_codes'][0])
-    assert security.current(verified['access_token']).id==user.id
-    assert security.recovery_remaining(user)==9
-    assert 'recovery_codes' not in client.get('/session',headers={'Authorization':f"Bearer {verified['access_token']}"}).json()
+    assert 'access_token' not in verified
+    assert security.current(verified['enrollment_token'],'enrollment').id==user.id
+    assert security.recovery_remaining(user)==0
+    assert client.get('/session',headers={'Authorization':f"Bearer {verified['enrollment_token']}"}).status_code==401
 
 
 @pytest.mark.parametrize('change',['expired','consumed','inactive','version'])
@@ -95,22 +96,39 @@ def test_webauthn_onboarding_binding_multiple_keys_and_either_signs_in(repo,secu
         assert service.finish_authentication(login,request['challenge_id'],key.assert_login(request['options']))['access_token']
 
 
-def test_recovery_reuse_regeneration_foreign_codes_and_preserved_authenticator(repo,security):
+def test_recovery_revokes_factors_sessions_and_requires_fresh_enrollment(repo,security):
     user,codes,seed=totp_setup(repo,security)
+    key=Authenticator();service=WebAuthn(security)
+    request=service.begin_registration(user,'Fixture key')
+    service.finish_registration(user,request['challenge_id'],key.register(request['options']))
+    user=repo.user(user_id=user.id)
+    old_access=security.tokens.issue(user)
     login=security.login(user.username,PASSWORD)['challenge_token']
-    access=security.recover(login,codes[0])['access_token']
-    with pytest.raises(AuthenticationError):security.recover(login,codes[1])
-    newlogin=security.login(user.username,PASSWORD)['challenge_token']
-    with pytest.raises(AuthenticationError):security.recover(newlogin,codes[0])
-    other,foreign,_=totp_setup(repo,security,'other')
-    with pytest.raises(AuthenticationError):security.recover(newlogin,foreign[0])
-    with pytest.raises(AuthenticationError):security.regenerate_recovery(user,'incorrect')
-    changed=security.regenerate_recovery(user,PASSWORD)['recovery_codes']
-    assert repo.user(user_id=user.id).totp_secret==user.totp_secret
-    with pytest.raises(AuthenticationError):security.current(access)
+    other_login=security.login(user.username,PASSWORD)['challenge_token']
+    pending_key=service.begin_authentication(other_login)
+    with pytest.raises(AuthenticationError):security.recover(login,'incorrect')
+    assert security.has_factor(repo.user(user_id=user.id))
+    result=security.recover(login,codes[0])
+    assert 'access_token' not in result and result['recovery_reset']
+    assert not security.has_factor(repo.user(user_id=user.id))
+    assert not repo.webauthn_credentials(user.id)
+    assert security.recovery_remaining(user)==0
+    for token in [old_access,result['enrollment_token']]:
+        with pytest.raises(AuthenticationError):security.current(token)
+    for token in [login,other_login]:
+        with pytest.raises(AuthenticationError):security.recover(token,codes[1])
+    with pytest.raises(AuthenticationError):service.finish_authentication(other_login,pending_key['challenge_id'],key.assert_login(pending_key['options']))
+    token=result['enrollment_token']
+    new_seed=security.onboarding_totp(token)['secret']
+    assert new_seed!=seed
+    new_codes=security.onboarding_totp(token,pyotp.TOTP(new_seed).now())['recovery_codes']
+    assert len(new_codes)==10 and not set(new_codes)&set(codes)
+    user=repo.user(user_id=user.id)
+    assert security.has_factor(user)
+    with pytest.raises(AuthenticationError):security.current(token,'enrollment')
     fresh=security.login(user.username,PASSWORD)['challenge_token']
     with pytest.raises(AuthenticationError):security.recover(fresh,codes[1])
-    assert security.recover(fresh,changed[0])['access_token']
+    assert security.recover(fresh,new_codes[0])['enrollment_token']
 
 
 @pytest.mark.parametrize('change',['expired','consumed','inactive','version','attempts'])
