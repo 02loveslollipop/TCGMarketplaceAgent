@@ -1,6 +1,7 @@
 /* Full-page chat surface, following the official Cloudscape chat demo. */
 .chat-route { block-size: 100%; min-block-size: 0; }
-.chat-navigation-host { position: absolute; inset: 0; }
+/* Normal flow keeps the layout close button above the navigation heading. */
+.chat-navigation-host { block-size: 100%; min-block-size: 0; }
 .chat-navigation { display: flex; flex-direction: column; block-size: 100%; min-block-size: 0; }
 .chat-navigation-content { flex: 1; min-block-size: 0; overflow-y: auto; }
 .chat-nav-section { padding: 16px; }
