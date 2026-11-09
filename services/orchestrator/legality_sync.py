@@ -18,8 +18,15 @@ POKEMON_CARD_JP_URL = "https://www.pokemon-card.com/rules/regulation/"
 
 MODERN_SET_CODE_MAPPINGS: dict[str, str] = {
     "me01": "MEG",
+    "me02": "PFL",
     "me02.5": "ASC",
-    "me03": "PFO",
+    "me03": "POR",
+    "mee": "MEE",
+    "mep": "MEP",
+    "sve": "SVE",
+    "svp": "SVP",
+    "sv10.5w": "WHT",
+    "sv10.5b": "BLK",
     "me04": "CRI",
     "me05": "PBL",
     "me06": "DLR",
@@ -85,6 +92,9 @@ def fetch_tcgdex_sets() -> tuple[list[dict], list[dict]]:
         name
         releaseDate
         tcgOnline
+        abbreviation {
+          official
+        }
         serie {
           id
           name
@@ -99,6 +109,9 @@ def fetch_tcgdex_sets() -> tuple[list[dict], list[dict]]:
         name
         releaseDate
         tcgOnline
+        abbreviation {
+          official
+        }
         serie {
           id
           name
@@ -268,11 +281,11 @@ def build_legality_dataset(triggered_by: str = "system") -> dict[str, Any]:
         seen_set_ids.add(record_id)
         serie_id = (s.get("serie") or {}).get("id", "").lower()
         release_date = s.get("releaseDate") or ""
-        tcg_online = s.get("tcgOnline") or MODERN_SET_CODE_MAPPINGS.get(sid, sid.upper())
+        tcg_online = s.get("tcgOnline") or (s.get("abbreviation") or {}).get("official") or MODERN_SET_CODE_MAPPINGS.get(sid, sid.upper())
 
         # An English set is Standard legal if its series is Scarlet & Violet (or later) or released in the H/I/J era
-        is_std = serie_id in {"sv", "me"}
-        is_exp = serie_id in exp_series or is_std
+        is_std = (serie_id in {"sv", "me"}) or (sid in {"sve", "mee"})
+        is_exp = serie_id in exp_series or is_std or (sid in {"sve", "mee"})
 
         sets_records.append({
             "id": record_id,
@@ -297,11 +310,11 @@ def build_legality_dataset(triggered_by: str = "system") -> dict[str, Any]:
         seen_set_ids.add(record_id)
         serie_id = (s.get("serie") or {}).get("id", "").lower()
         release_date = s.get("releaseDate") or ""
-        tcg_online = s.get("tcgOnline") or MODERN_SET_CODE_MAPPINGS.get(sid, sid.upper())
+        tcg_online = s.get("tcgOnline") or (s.get("abbreviation") or {}).get("official") or MODERN_SET_CODE_MAPPINGS.get(sid, sid.upper())
 
         # Japanese series: SV and MEGA (or M) are Standard; BW through MEGA are Extra
-        is_std = serie_id in {"sv", "m", "me", "mega"} or release_date >= "2023-01-01"
-        is_exp = serie_id in {"bw", "xy", "sm", "s", "swsh", "sv", "m", "me", "mega"} or is_std
+        is_std = serie_id in {"sv", "m", "me", "mega"} or release_date >= "2023-01-01" or (sid in {"sve", "mee"})
+        is_exp = serie_id in {"bw", "xy", "sm", "s", "swsh", "sv", "m", "me", "mega"} or is_std or (sid in {"sve", "mee"})
 
         sets_records.append({
             "id": record_id,

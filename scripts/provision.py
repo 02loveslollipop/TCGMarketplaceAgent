@@ -92,6 +92,14 @@ def runtime_files(values: dict, passwords: dict, admin_info: dict):
                 if "\n" in value or "\r" in value:
                     raise ValueError(f"Invalid multiline value for {name}")
                 lines.append(f"{name}={value}")
+            ddg_mcp_url = str(values.get("DDG_MCP_URL") or "http://ddg-mcp:8000/mcp")
+            if "\n" in ddg_mcp_url or "\r" in ddg_mcp_url:
+                raise ValueError("Invalid multiline value for DDG_MCP_URL")
+            lines.append(f"DDG_MCP_URL={ddg_mcp_url}")
+            mcp_auth_token = str(values.get("MCP_AUTH_TOKEN") or "")
+            if "\n" in mcp_auth_token or "\r" in mcp_auth_token:
+                raise ValueError("Invalid multiline value for MCP_AUTH_TOKEN")
+            lines.append(f"MCP_AUTH_TOKEN={mcp_auth_token}")
         private_write(folder / f"{service}.env", "\n".join(lines) + "\n")
 
 

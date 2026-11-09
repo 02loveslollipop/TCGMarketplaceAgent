@@ -1,0 +1,1 @@
+"""DuckDuckGo MCP service package."""

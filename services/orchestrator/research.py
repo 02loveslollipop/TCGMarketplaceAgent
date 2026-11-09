@@ -2,6 +2,7 @@ import asyncio
 from html.parser import HTMLParser
 import ipaddress
 import json
+import os
 import re
 import socket
 from typing import Any
@@ -23,7 +24,9 @@ TCGDEX_GQL_URL = "https://api.tcgdex.net/v2/graphql"
 LIMITLESS_DECKS_URL = "https://limitlesstcg.com/decks"
 
 SET_CODE_MAP = {
-    "MEG": "me01", "ASC": "me02.5", "PFO": "me03", "CRI": "me04", "PBL": "me05", "DLR": "me06",
+    "POR": "me03", "PFO": "me03", "PFL": "me02", "MEE": "mee", "MEP": "mep",
+    "SVE": "sve", "SVP": "svp", "PR-SV": "svp", "WHT": "sv10.5w", "BLK": "sv10.5b",
+    "MEG": "me01", "ASC": "me02.5", "CRI": "me04", "PBL": "me05", "DLR": "me06",
     "SVI": "sv01", "PAL": "sv02", "OBF": "sv03", "MEW": "sv03.5", "PAR": "sv04", "PAF": "sv04.5",
     "TEF": "sv05", "TWM": "sv06", "SFA": "sv06.5", "SCR": "sv07", "SSP": "sv08", "PRE": "sv08.5",
     "JTG": "sv09", "DRI": "sv10",
@@ -59,8 +62,15 @@ def public_https(url: str):
 
 
 class Research:
-    def __init__(self, repository: Repository | None = None):
+    def __init__(
+        self,
+        repository: Repository | None = None,
+        mcp_url: str | None = None,
+        mcp_auth_token: str | None = None,
+    ):
         self.repository = repository
+        self.mcp_url = (mcp_url if mcp_url is not None else os.getenv("DDG_MCP_URL", "")).strip()
+        self.mcp_auth_token = (mcp_auth_token if mcp_auth_token is not None else os.getenv("MCP_AUTH_TOKEN", "")).strip()
         self.sources: dict[str, Source] = {}
         self.cards: dict[str, dict] = {}
         self.network_calls = 0
@@ -70,39 +80,90 @@ class Research:
         if self.network_calls > 120:
             raise ValueError("Research network-call limit reached.")
 
+    async def _call_ddg_mcp_tool(self, tool_name: str, arguments: dict) -> str:
+        headers = {"Authorization": f"Bearer {self.mcp_auth_token}"} if self.mcp_auth_token else None
+        if self.mcp_url:
+            try:
+                from mcp.client.streamable_http import streamable_http_client
+                from mcp import ClientSession
+
+                async with streamable_http_client(self.mcp_url, headers=headers) as streams:
+                    read, write = streams[:2]
+                    async with ClientSession(read, write) as session:
+                        await session.initialize()
+                        res = await session.call_tool(tool_name, arguments)
+                        if getattr(res, "isError", False):
+                            raise RuntimeError("\n".join(getattr(c, "text", "") for c in res.content))
+                        return "\n".join(getattr(c, "text", "") for c in res.content if getattr(c, "text", None))
+            except httpx.ConnectError:
+                pass
+
+        # Fallback to duckduckgo_mcp_server in-process objects
+        import duckduckgo_mcp_server.server as ddg_server
+
+        class _DummyContext:
+            async def info(self, *a, **kw): pass
+            async def error(self, *a, **kw): pass
+            async def warning(self, *a, **kw): pass
+            async def debug(self, *a, **kw): pass
+
+        ctx = _DummyContext()
+        if tool_name == "search":
+            searcher = ddg_server.DuckDuckGoSearcher(backend="auto", ref_url_threshold=0, link_registry=ddg_server.links)
+            results = await searcher.search(arguments["query"], ctx, max_results=arguments.get("max_results", 10), region=arguments.get("region", ""))
+            return searcher.format_results_for_llm(results)
+        elif tool_name == "fetch_content":
+            fetcher = ddg_server.WebContentFetcher(backend="auto", allow_private_urls=False, parse_mode="markdown", link_registry=ddg_server.links)
+            return await fetcher.fetch_and_parse(
+                arguments["url"],
+                ctx,
+                start_index=arguments.get("start_index", 0),
+                max_length=arguments.get("max_length", 8000),
+                backend=arguments.get("backend"),
+                parse_mode=arguments.get("parse_mode"),
+            )
+        elif tool_name == "expand_link":
+            token = arguments.get("token", "")
+            resolved = ddg_server.links.resolve(token)
+            return resolved if resolved is not None else token
+        else:
+            raise ValueError(f"Unknown tool: {tool_name}")
+
     async def search(self, query: str) -> list[dict]:
         self.network_budget()
-        rows = await asyncio.to_thread(lambda: DDGS(timeout=15).text(query[:500], max_results=6))
+        raw = await self._call_ddg_mcp_tool("search", {"query": query[:500], "max_results": 8})
         results = []
-        for row in rows:
+        matches = re.finditer(
+            r"^\d+\.\s+(.+?)\n\s*URL:\s*(\S+)\n\s*Summary:\s*(.+?)(?=\n\d+\.|\Z)",
+            raw,
+            re.MULTILINE | re.DOTALL,
+        )
+        for m in matches:
+            title, url, snippet = m.group(1).strip(), m.group(2).strip(), m.group(3).strip()
+            if url.startswith("ref://"):
+                try:
+                    url = await self._call_ddg_mcp_tool("expand_link", {"token": url})
+                except Exception:
+                    pass
+            if not url.startswith("https://"):
+                continue
             try:
-                source = Source(url=row["href"], title=row["title"], excerpt=row.get("body", "")[:1500])
-                if str(source.url).startswith("https://"):
-                    self.sources[str(source.url)] = source
-                    results.append(source.model_dump(mode="json"))
-            except (ValueError, KeyError):
+                source = Source(url=url, title=title, excerpt=snippet[:1500])
+                self.sources[str(source.url)] = source
+                results.append(source.model_dump(mode="json"))
+            except Exception:
                 continue
         return results
 
     async def fetch(self, url: str) -> dict:
         self.network_budget()
         await asyncio.to_thread(public_https, url)
-        async with httpx.AsyncClient(timeout=20, follow_redirects=False) as client:
-            async with client.stream("GET", url, headers={"User-Agent": "PokemonTCGPrivatePoC/0.1"}) as response:
-                response.raise_for_status()
-                if "text/" not in response.headers.get("content-type", "") and "json" not in response.headers.get("content-type", ""):
-                    raise ValueError("Source is not a text page.")
-                data = bytearray()
-                async for chunk in response.aiter_bytes():
-                    data.extend(chunk)
-                    if len(data) > 500_000:
-                        raise ValueError("Source exceeds the research page limit.")
-        parser = TextParser()
-        parser.feed(data.decode("utf-8", errors="replace"))
-        text = "\n".join(parser.parts)[:20000]
-        if any(marker in text.casefold() for marker in ("verify you are human", "just a moment...", "checking your browser")):
-            raise ValueError("Source protection page encountered; no bypass is attempted.")
-        source = Source(url=url, title=parser.parts[0][:200] if parser.parts else url, excerpt=text)
+        text = await self._call_ddg_mcp_tool("fetch_content", {"url": url, "max_length": 20000, "backend": "auto", "parse_mode": "markdown"})
+        text = re.sub(r"\n\n---\n\[Content info:.*?\]$", "", text, flags=re.DOTALL).strip()
+        if text.startswith("Error:") or any(marker in text.casefold() for marker in ("verify you are human", "just a moment...", "checking your browser")):
+            raise ValueError(text)
+        first_line = text.split("\n", 1)[0].strip() if text else url
+        source = Source(url=url, title=first_line[:200] or url, excerpt=text[:20000])
         self.sources[str(source.url)] = source
         return source.model_dump(mode="json")
 
@@ -406,7 +467,7 @@ class Research:
             clean_name = re.sub(r"<[^>]+>", "", inner).strip()
             if clean_name and "Decks" not in clean_name:
                 archetypes.append({
-                    "archetype_id": href.removeprefix("/decks/"),
+                    "archetype_id": f"decks/{href.removeprefix('/decks/')}",
                     "name": clean_name,
                     "url": f"https://limitlesstcg.com{href}",
                 })
@@ -415,26 +476,56 @@ class Research:
     async def get_deck_list(self, deck_id_or_list_id: str) -> dict:
         """Fetch tournament deck list from Limitless TCG and resolve cards via TCGdex GraphQL."""
         self.network_budget()
-        # If given an archetype ID (e.g. "345"), find the latest tournament list ID first
-        target_id = deck_id_or_list_id.strip().removeprefix("/decks/").removeprefix("list/")
-        url = f"https://limitlesstcg.com/decks/list/{target_id}" if not target_id.startswith("decks/") else f"https://limitlesstcg.com/{target_id}"
-        
+        raw_id = deck_id_or_list_id.strip()
+        is_list = False
+        if raw_id.startswith(("/decks/list/", "list/")):
+            is_list = True
+            list_id = raw_id.removeprefix("/decks/list/").removeprefix("list/").strip()
+        elif raw_id.startswith(("/decks/", "decks/")):
+            is_list = False
+            arch_id = raw_id.removeprefix("/decks/").removeprefix("decks/").strip()
+        elif raw_id.isdigit():
+            val = int(raw_id)
+            if val >= 2000:
+                is_list = True
+                list_id = raw_id
+            else:
+                is_list = False
+                arch_id = raw_id
+        else:
+            is_list = True
+            list_id = raw_id
+
         async with httpx.AsyncClient(timeout=20, headers={"User-Agent": "PokemonTCGPrivatePoC/0.1"}) as client:
-            resp = await client.get(url)
-            if resp.status_code == 404:
-                # Try as archetype overview
-                arch_url = f"https://limitlesstcg.com/decks/{target_id}"
+            if not is_list:
+                arch_url = f"https://limitlesstcg.com/decks/{arch_id}"
                 resp = await client.get(arch_url)
-                resp.raise_for_status()
-                lists = re.findall(r"href=[\"\x27](/decks/list/\d+)[\"\x27]", resp.text)
-                if not lists:
-                    raise ValueError(f"No deck list found for archetype {target_id}")
-                url = f"https://limitlesstcg.com{lists[0]}"
+                if resp.status_code == 200:
+                    lists = re.findall(r"href=[\"\x27](/decks/list/\d+)[\"\x27]", resp.text)
+                    if lists:
+                        url = f"https://limitlesstcg.com{lists[0]}"
+                        resp = await client.get(url)
+                    else:
+                        url = f"https://limitlesstcg.com/decks/list/{arch_id}"
+                        resp = await client.get(url)
+                else:
+                    url = f"https://limitlesstcg.com/decks/list/{arch_id}"
+                    resp = await client.get(url)
+            else:
+                url = f"https://limitlesstcg.com/decks/list/{list_id}"
                 resp = await client.get(url)
+                if resp.status_code == 404:
+                    arch_url = f"https://limitlesstcg.com/decks/{list_id}"
+                    resp = await client.get(arch_url)
+                    if resp.status_code == 200:
+                        lists = re.findall(r"href=[\"\x27](/decks/list/\d+)[\"\x27]", resp.text)
+                        if lists:
+                            url = f"https://limitlesstcg.com{lists[0]}"
+                            resp = await client.get(url)
             resp.raise_for_status()
             text = resp.text
 
-        source = Source(url=url, title=f"Limitless TCG deck list {target_id}", excerpt=text[:4000])
+        source = Source(url=url, title=f"Limitless TCG deck list {url}", excerpt=text[:4000])
         self.sources[url] = source
 
         # Parse cards
@@ -465,15 +556,20 @@ class Research:
                 "quantity": count,
                 "name": clean_name,
                 "candidate_id": candidate_id,
+                "basic_energy": clean_name.lower().endswith(" energy"),
             })
 
         # Batch resolve all cards in 1 GraphQL call
         resolved = await self.get_cards(tcgdex_ids_to_fetch)
-        resolved_map = {c.get("id"): c for c in resolved if c.get("id")}
+        resolved_map = {c.get("id"): c for c in resolved if c.get("id") and not c.get("unknown")}
 
         final_cards = []
         for entry in card_entries:
             matched_meta = resolved_map.get(entry["candidate_id"])
+            if not matched_meta:
+                cached_candidate = self.cards.get(entry["candidate_id"])
+                if cached_candidate and not cached_candidate.get("unknown"):
+                    matched_meta = cached_candidate
             if not matched_meta:
                 # Try padded / unpadded match
                 for mid, mdata in resolved_map.items():
@@ -482,6 +578,27 @@ class Research:
                     ):
                         matched_meta = mdata
                         break
+            if not matched_meta:
+                try:
+                    cands = await self.search_cards(entry["name"])
+                    for cand in cands:
+                        if cand.get("id", "").startswith(f"{entry['tcgdex_set']}-") or str(cand.get("localId", "")).lstrip("0") == entry["number"].lstrip("0"):
+                            matched_meta = cand
+                            self.cards[entry["candidate_id"]] = matched_meta
+                            break
+                except Exception:
+                    pass
+            if not matched_meta:
+                matched_meta = {
+                    "id": entry["candidate_id"],
+                    "name": entry["name"],
+                    "localId": entry["number"],
+                    "category": "Energy" if entry["basic_energy"] else "Pokemon",
+                    "energyType": "Normal" if entry["basic_energy"] else None,
+                    "set": {"id": entry["tcgdex_set"], "name": entry["set_code"], "tcgOnline": entry["set_code"]},
+                    "legal": {"standard": True, "expanded": True},
+                }
+                self.cards[entry["candidate_id"]] = matched_meta
 
             final_cards.append({
                 "card_id": matched_meta.get("id") if matched_meta else entry["candidate_id"],

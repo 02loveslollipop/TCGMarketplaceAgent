@@ -2,6 +2,7 @@ import {useState} from 'react';
 import {Alert,Box,Button,Cards,ColumnLayout,Container,ExpandableSection,Header,KeyValuePairs,Link,Pagination,SegmentedControl,SpaceBetween,StatusIndicator,Table,Tabs,TextFilter} from '@cloudscape-design/components';
 import type {BudgetLine,Card,Legality,Missing,Result,Source} from './contracts';
 import {safeHref} from './client';
+import {Markdown} from './Markdown';
 
 function variantDetails(card:BudgetLine|Missing):string {
   return [card.set_name,card.number&&`#${card.number}`,card.condition,card.language,card.printing].filter(Boolean).join(' · ') || 'Variant details unavailable';
@@ -42,7 +43,7 @@ export function CardResults({cards,legality,sources=[]}:{cards:Card[];legality:L
 
 export function BudgetResults({result}:{result:Result}) {
   return <SpaceBetween size="l">
-    <Container header={<Header variant="h3">Recommendation</Header>}><SpaceBetween size="s"><Box>{result.recommendation||'Review the quotations and coverage below.'}</Box><Box color="text-body-secondary">{result.plan.format} · {result.plan.cards.reduce((sum,card)=>sum+card.quantity,0)} requested cards · {result.offers.length} retrieved offers</Box></SpaceBetween></Container>
+    <Container header={<Header variant="h3">Recommendation</Header>}><SpaceBetween size="s"><div className="chat-message-text"><Markdown text={result.recommendation||'Review the quotations and coverage below.'}/></div><Box color="text-body-secondary">{result.plan.format} · {result.plan.cards.reduce((sum,card)=>sum+card.quantity,0)} requested cards · {result.offers.length} retrieved offers</Box></SpaceBetween></Container>
     <StatusIndicator type={result.legality.status==='verified'?'success':'warning'}>Format legality: {result.legality.status}</StatusIndicator>
     {result.legality.issues.map((issue,index)=><Alert key={index} type="warning">{issue}</Alert>)}
     {result.supplier_errors.map((error,index)=><Alert key={index} type="warning" header={error.supplier}>{error.message}</Alert>)}
@@ -65,7 +66,7 @@ export function BudgetResults({result}:{result:Result}) {
           </SpaceBetween>
         </ExpandableSection>)}
       </SpaceBetween>},
-      {id:'deck',label:'Deck',content:<SpaceBetween size="m"><Box>{result.plan.explanation}</Box><CardResults cards={result.plan.cards} legality={result.legality} sources={result.plan.sources}/></SpaceBetween>},
+      {id:'deck',label:'Deck',content:<SpaceBetween size="m"><div className="chat-message-text"><Markdown text={result.plan.explanation}/></div><CardResults cards={result.plan.cards} legality={result.legality} sources={result.plan.sources}/></SpaceBetween>},
       {id:'offers',label:`Offers (${result.offers.length})`,content:<Table data-testid="offers-table" header={<Header variant="h3" counter={`(${result.offers.length})`}>Retrieved offers</Header>} items={result.offers} empty={<Box textAlign="center" padding="l">No comparable quotations were retrieved.</Box>} columnDefinitions={[
         {id:'name',header:'Card',cell:offer=>offer.name},{id:'supplier',header:'Supplier',cell:offer=>offer.supplier},
         {id:'price',header:'Unit price',cell:offer=>`${offer.price} ${offer.currency} (${offer.price_kind})`},

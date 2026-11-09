@@ -352,3 +352,194 @@ async def test_weekly_auto_refresh_trigger(repo):
         assert mock_sync.called
 
 
+def test_ddg_mcp_service_health_and_auth(monkeypatch):
+    from starlette.testclient import TestClient
+    import services.ddg_mcp.main as ddg_main
+
+    with TestClient(ddg_main.app) as client:
+        # GET /health returns 200 OK
+        resp = client.get("/health")
+        assert resp.status_code == 200
+        assert resp.json() == {"status": "ok"}
+
+        # When MCP_AUTH_TOKEN is set, /mcp requires Bearer token
+        monkeypatch.setenv("MCP_AUTH_TOKEN", "test-secret-token")
+        mcp_unauth = client.post("/mcp")
+        assert mcp_unauth.status_code == 401
+        assert mcp_unauth.json() == {"error": "Unauthorized"}
+
+        health_auth = client.get("/health")
+        assert health_auth.status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_research_search_ddg_mcp():
+    research = Research()
+    mock_mcp_output = """Found 2 search results:
+
+1. Limitless TCG Decks
+   URL: https://limitlesstcg.com/decks
+   Summary: Tournament Pokémon TCG deck lists and standings.
+
+2. PokeBeach News
+   URL: https://pokebeach.com/news
+   Summary: Latest Pokémon TCG set announcements and spoilers.
+"""
+    with patch.object(research, "_call_ddg_mcp_tool", return_value=mock_mcp_output) as mock_call:
+        results = await research.search("limitless decks")
+        assert mock_call.called
+        assert len(results) == 2
+        assert results[0]["title"] == "Limitless TCG Decks"
+        assert results[0]["url"] == "https://limitlesstcg.com/decks"
+        assert "https://limitlesstcg.com/decks" in research.sources
+        assert "https://pokebeach.com/news" in research.sources
+
+
+@pytest.mark.asyncio
+async def test_research_fetch_ddg_mcp():
+    research = Research()
+    mock_content = """# Limitless TCG
+Tournament deck lists and deck data for Pokémon TCG.
+
+---
+[Content info: Showing characters 0-80 of 80 total | parse=markdown]"""
+
+    with patch.object(research, "_call_ddg_mcp_tool", return_value=mock_content) as mock_call:
+        res = await research.fetch("https://limitlesstcg.com/decks")
+        assert mock_call.called
+        assert res["url"] == "https://limitlesstcg.com/decks"
+        assert "[Content info:" not in res["excerpt"]
+        assert "https://limitlesstcg.com/decks" in research.sources
+
+    with patch.object(research, "_call_ddg_mcp_tool", return_value="Just a moment... Please verify you are human"):
+        with pytest.raises(ValueError, match="verify you are human"):
+            await research.fetch("https://limitlesstcg.com/blocked")
+
+
+@pytest.mark.asyncio
+async def test_research_get_deck_list_archetype_and_sets():
+    research = Research()
+    arch_html = """<html><body>
+    <h1>Mega Lucario ex</h1>
+    <a href="/decks/list/31206">1st Place List</a>
+    </body></html>"""
+    deck_html = """<html><body>
+    <div class="decklist-card" data-set="POR" data-number="62">
+        <span class="card-count">4</span>
+        <span class="card-name">Lucario ex</span>
+    </div>
+    <div class="decklist-card" data-set="MEE" data-number="14">
+        <span class="card-count">10</span>
+        <span class="card-name">Fighting Energy</span>
+    </div>
+    </body></html>"""
+
+    async def mock_get(url, *args, **kwargs):
+        mock_resp = MagicMock()
+        mock_resp.status_code = 200
+        if "decks/345" in url:
+            mock_resp.text = arch_html
+        elif "decks/list/31206" in url:
+            mock_resp.text = deck_html
+        else:
+            mock_resp.text = ""
+        mock_resp.raise_for_status = MagicMock()
+        return mock_resp
+
+    with patch("httpx.AsyncClient.get", side_effect=mock_get):
+        async def mock_get_cards(ids, **kwargs):
+            return [
+                {"id": "me03-62", "name": "Lucario ex", "localId": "62", "category": "Pokemon", "set": {"id": "me03", "name": "Perfect Order", "tcgOnline": "POR"}},
+                {"id": "mee-014", "name": "Basic Fighting Energy", "localId": "14", "category": "Energy", "set": {"id": "mee", "name": "Mega Evolution Energy", "tcgOnline": "MEE"}},
+            ]
+        with patch.object(research, "get_cards", side_effect=mock_get_cards):
+            res = await research.get_deck_list("345")
+            assert res["source_url"] == "https://limitlesstcg.com/decks/list/31206"
+            assert res["total_cards"] == 14
+            cards = res["cards"]
+            assert cards[0]["name"] == "Lucario ex"
+            assert cards[0]["set_code"] == "POR"
+            assert cards[1]["name"] == "Basic Fighting Energy"
+            assert cards[1]["set_code"] == "MEE"
+            assert not cards[0].get("unknown")
+            assert not cards[1].get("unknown")
+
+
+@pytest.mark.asyncio
+async def test_planner_validate_energy_name_normalization_and_conflict(repo):
+    research = Research(repo)
+    planner = Planner(model=MagicMock(), research=research)
+
+    research.cards["mee-014"] = {
+        "id": "mee-014",
+        "name": "Basic Fighting Energy",
+        "localId": "14",
+        "category": "Energy",
+        "energyType": "Normal",
+        "set": {"id": "mee", "name": "Mega Evolution Energy", "tcgOnline": "MEE"},
+        "legal": {"standard": True, "expanded": True},
+    }
+
+    from shared.contracts import CardRequest, AgentPlan, utcnow
+    plan = AgentPlan(
+        format="standard",
+        ruleset="international",
+        cards=[
+            CardRequest(
+                card_id="mee-014",
+                name="Fighting Energy",
+                quantity=10,
+                set_name="Mega Evolution Energy",
+                number="14",
+                condition="Near Mint",
+                language="English",
+                printing="Normal",
+            )
+        ],
+    )
+
+    validated = planner.validate(plan)
+    assert validated.question is None
+    assert validated.cards[0].name == "Basic Fighting Energy"
+    assert validated.cards[0].basic_energy is True
+
+    # Test auto ruleset disambiguation on set conflict
+    sets = [
+        {"id": "japan:m1", "ruleset": "japan", "tcgdex_id": "m1", "set_code": "M1", "name": "Mega Rayquaza ex", "series": "MEGA", "release_date": "2025-04-01", "legal_standard": True, "legal_expanded": True, "card_count": 120},
+        {"id": "international:sv08", "ruleset": "international", "tcgdex_id": "sv08", "set_code": "SSP", "name": "Surging Sparks", "series": "Scarlet & Violet", "release_date": "2024-11-08", "legal_standard": True, "legal_expanded": True, "card_count": 252},
+    ]
+    repo.replace_legality_catalog(sets=sets, bans=[], sync_state={"status": "synced", "last_refreshed_at": utcnow()})
+
+    research.cards["m1-001"] = {
+        "id": "m1-001",
+        "name": "Mega Rayquaza ex",
+        "localId": "001",
+        "category": "Pokemon",
+        "set": {"id": "m1", "name": "Mega Rayquaza ex", "tcgOnline": "M1"},
+        "legal": {"standard": True, "expanded": True},
+    }
+
+    conflict_plan = AgentPlan(
+        format="standard",
+        ruleset="international",
+        cards=[
+            CardRequest(
+                card_id="m1-001",
+                name="Mega Rayquaza ex",
+                quantity=4,
+                set_name="Mega Rayquaza ex",
+                number="001",
+                condition="Near Mint",
+                language="Japanese",
+                printing="Normal",
+            )
+        ],
+    )
+    validated_conflict = planner.validate(conflict_plan, preferences={"ruleset": "auto", "format": "standard"})
+    assert validated_conflict.question is not None
+    assert "differences between International and Japan rulesets" in validated_conflict.question
+    assert "International (Play! Pokémon)" in validated_conflict.options
+    assert "Japan (Official Pokémon Card)" in validated_conflict.options
+
+
+

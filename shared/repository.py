@@ -324,7 +324,7 @@ class Repository:
         set_query: str | None = None,
         card_query: str | None = None,
         card_name: str | None = None,
-        limit: int = 100,
+        limit: int = 500,
     ) -> dict:
         actual_format = format_ or format
         actual_card_query = card_query or card_name

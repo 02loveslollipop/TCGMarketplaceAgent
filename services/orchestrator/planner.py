@@ -109,13 +109,17 @@ class Planner:
                 question="I could not establish a complete 60-card deck from the retrieved sources. Please provide a deck list or another deck source to verify.",
                 options=["Search tournament deck lists", "Provide custom card list"],
             )
+        def _norm_card_name(val: str) -> str:
+            n = normalized(val)
+            return n.removeprefix("basic ").strip() if n.endswith(" energy") else n
+
         for card in plan.cards:
             metadata = self.research.cards.get(card.card_id)
             if not metadata:
                 # Try finding in cached cards by matching localId (ignoring zero-padding) and name
                 for mid, m in self.research.cards.items():
                     if (
-                        normalized(m.get("name", "")) == normalized(card.name)
+                        _norm_card_name(m.get("name", "")) == _norm_card_name(card.name)
                         and str(m.get("localId", "")).lstrip("0") == str(card.number).lstrip("0")
                     ):
                         metadata = m
@@ -128,7 +132,7 @@ class Planner:
             # Compare name and number, normalizing leading zeros for numbers
             meta_name = metadata.get("name", "")
             meta_num = str(metadata.get("localId", ""))
-            name_matches = normalized(meta_name) == normalized(card.name)
+            name_matches = _norm_card_name(meta_name) == _norm_card_name(card.name)
             num_matches = meta_num.lstrip("0") == str(card.number).lstrip("0") or not card.number
 
             if not name_matches or not num_matches:
@@ -142,7 +146,9 @@ class Planner:
 
             image = metadata.get("image")
             card.image_url = f"{image}/high.webp" if image else None
-            card.basic_energy = metadata.get("category") == "Energy" and metadata.get("energyType") == "Normal"
+            card.basic_energy = metadata.get("category") == "Energy" and (
+                metadata.get("energyType") == "Normal" or _norm_card_name(card.name).endswith(" energy")
+            )
             card.cardmarket_identity_source = None
             if card.cardmarket_url:
                 evidence = self.research.sources.get(str(card.cardmarket_url))
@@ -152,13 +158,19 @@ class Planner:
                 else:
                     card.cardmarket_url = None
 
-        pref_ruleset = (preferences or {}).get("ruleset", "auto")
+        pref_ruleset = (preferences or {}).get("ruleset", "auto").lower()
+        pref_format = (preferences or {}).get("format", "").lower()
+        if pref_ruleset in {"international", "japan"}:
+            plan.ruleset = pref_ruleset
+        if pref_format in {"standard", "expanded"}:
+            plan.format = pref_format
+
         target_fmt = (plan.format or "standard").lower()
 
         # Check for cross-ruleset legality conflict when ruleset is auto
-        if pref_ruleset == "auto" and not plan.ruleset and self.research.repository:
-            intl_cat = self.research.repository.query_legality_catalog(ruleset="international", format_=target_fmt)
-            jp_cat = self.research.repository.query_legality_catalog(ruleset="japan", format_=target_fmt)
+        if pref_ruleset == "auto" and self.research.repository:
+            intl_cat = self.research.repository.query_legality_catalog(ruleset="international", format_=target_fmt, limit=1000)
+            jp_cat = self.research.repository.query_legality_catalog(ruleset="japan", format_=target_fmt, limit=1000)
 
             intl_bans = {normalized(b["card_name"]): b for b in intl_cat.get("banned_cards", [])}
             intl_ban_ids = {b["card_id"] for b in intl_cat.get("banned_cards", []) if b.get("card_id")}
@@ -169,20 +181,59 @@ class Planner:
                     jp_bans[normalized(b["card_name_ja"])] = b
             jp_ban_ids = {b["card_id"] for b in jp_cat.get("banned_cards", []) if b.get("card_id")}
 
-            conflicts = []
+            intl_sets = intl_cat.get("sets", [])
+            jp_sets = jp_cat.get("sets", [])
+
+            intl_legal_set_ids = {s["tcgdex_id"].lower() for s in intl_sets if s.get("tcgdex_id")}
+            intl_legal_set_codes = {s["set_code"].upper() for s in intl_sets if s.get("set_code")}
+            intl_legal_set_names = {normalized(s["name"]) for s in intl_sets if s.get("name")}
+
+            jp_legal_set_ids = {s["tcgdex_id"].lower() for s in jp_sets if s.get("tcgdex_id")}
+            jp_legal_set_codes = {s["set_code"].upper() for s in jp_sets if s.get("set_code")}
+            jp_legal_set_names = {normalized(s["name"]) for s in jp_sets if s.get("name")}
+
+            conflict_cards = []
             for card in plan.cards:
                 norm_cname = normalized(card.name)
+                # a. Ban conflict
                 is_intl_banned = card.card_id in intl_ban_ids or norm_cname in intl_bans
                 is_jp_banned = card.card_id in jp_ban_ids or norm_cname in jp_bans
                 if is_intl_banned != is_jp_banned:
-                    conflicts.append((card.name, is_intl_banned, is_jp_banned))
+                    banned_side = "International" if is_intl_banned else "Japan"
+                    conflict_cards.append(f"'{card.name}' is banned in {banned_side}")
 
-            if conflicts:
-                c_name, is_intl, _ = conflicts[0]
-                banned_ruleset = "International" if is_intl else "Japan"
-                legal_ruleset = "Japan" if is_intl else "International"
+                # b. Set/card existence or legality conflict
+                if not card.basic_energy and intl_sets and jp_sets:
+                    meta = self.research.cards.get(card.card_id, {})
+                    set_obj = meta.get("set") or {}
+                    card_set_id = (set_obj.get("id") or "").lower()
+                    if not card_set_id and "-" in card.card_id:
+                        card_set_id = card.card_id.split("-")[0].lower()
+                    card_set_code = (set_obj.get("tcgOnline") or card.set_name or "").upper()
+                    card_set_name = normalized(set_obj.get("name") or card.set_name or "")
+
+                    intl_set_legal = (
+                        (card_set_id in intl_legal_set_ids)
+                        or (card_set_code and card_set_code in intl_legal_set_codes)
+                        or (card_set_name and card_set_name in intl_legal_set_names)
+                    )
+                    jp_set_legal = (
+                        (card_set_id in jp_legal_set_ids)
+                        or (card_set_code and card_set_code in jp_legal_set_codes)
+                        or (card_set_name and card_set_name in jp_legal_set_names)
+                    )
+
+                    if intl_set_legal != jp_set_legal:
+                        legal_side = "International" if intl_set_legal else "Japan"
+                        set_disp = set_obj.get("name") or card.set_name or card_set_id.upper()
+                        conflict_cards.append(f"'{card.name}' from set '{set_disp}' is legal only in {legal_side}")
+
+            if conflict_cards:
                 return AgentPlan(
-                    question=f"Card '{c_name}' has different tournament legality: it is banned in {banned_ruleset} {target_fmt.capitalize()} format, but legal in {legal_ruleset}. Which ruleset should this deck follow?",
+                    question=(
+                        f"The requested deck has differences between International and Japan rulesets "
+                        f"({'; '.join(conflict_cards[:3])}). Which ruleset would you like to use?"
+                    ),
                     options=["International (Play! Pokémon)", "Japan (Official Pokémon Card)"],
                 )
 
@@ -212,7 +263,7 @@ class Planner:
 
         # Deterministic PostgreSQL catalog validation
         if self.research.repository:
-            catalog = self.research.repository.query_legality_catalog(ruleset=ruleset, format_=fmt)
+            catalog = self.research.repository.query_legality_catalog(ruleset=ruleset, format_=fmt, limit=1000)
             banned_map = {normalized(b["card_name"]): b for b in catalog.get("banned_cards", [])}
             banned_id_set = {b["card_id"] for b in catalog.get("banned_cards", []) if b.get("card_id")}
             sync_state = catalog.get("sync_state", {})
