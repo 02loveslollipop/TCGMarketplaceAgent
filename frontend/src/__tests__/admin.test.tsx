@@ -5,28 +5,95 @@ import {Admin} from '../Admin';
 
 afterEach(()=>vi.unstubAllGlobals());
 const model={id:'gpt-6-luna',label:'GPT 6 luna',provider:'openai',api_id:'gpt-6-luna',enabled:false,verified_at:null};
+const second={...model,id:'mistral-medium-latest',label:'Mistral Medium',provider:'mistral',api_id:'mistral-medium-latest'};
+const json=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
+function mockModels(items=[model]) {
+  vi.stubGlobal('fetch',vi.fn(async(path:string,options?:RequestInit)=>json(path.includes('/accounts')?[]:options?.method==='PUT'?model:items)));
+}
 
-it('renders an independent model policy portal and submits explicit enabled state',async()=>{
-  vi.stubGlobal('fetch',vi.fn(async(path:string,options?:RequestInit)=>new Response(JSON.stringify(path.includes('/accounts')?[]:options?.method==='PUT'?model:[model]),{headers:{'Content-Type':'application/json'}})));
-  const user=userEvent.setup();render(<Admin token="admin-token"/>);
-  await screen.findByText('Disabled');
-  expect(screen.getByTestId('admin-models-table')).toHaveTextContent('gpt-6-luna');
-  await user.click(screen.getByRole('checkbox',{name:'Enabled for agent use'}));
-  await user.click(screen.getByRole('button',{name:'Save model policy'}));
-  await screen.findByText('Model policy saved.');
+it('edits a named policy in context and confirms the model and enabled state after saving',async()=>{
+  mockModels();const user=userEvent.setup();render(<Admin token="admin-token"/>);
+  await user.click(await screen.findByRole('button',{name:'Edit GPT 6 luna'}));
+  const dialog=screen.getByRole('dialog',{name:'Edit GPT 6 luna'});
+  expect(within(dialog).getByLabelText('Registry identifier')).toBeDisabled();
+  expect(dialog).toContainElement(document.activeElement as HTMLElement);
+  await user.click(within(dialog).getByRole('checkbox',{name:'Enabled for agent use'}));
+  await user.click(within(dialog).getByRole('button',{name:'Save model policy'}));
+  expect(await screen.findByText('GPT 6 luna model policy saved. Enabled in chat.')).toBeInTheDocument();
+  expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
   const call=vi.mocked(fetch).mock.calls.find(call=>call[1]?.method==='PUT')!;
+  expect(String(call[0])).toContain('/models/gpt-6-luna');
   expect(JSON.parse(String(call[1]!.body))).toEqual({label:'GPT 6 luna',provider:'openai',api_id:'gpt-6-luna',enabled:true});
 });
 
-it('reports server rejection of unverified or unavailable API IDs',async()=>{
-  vi.stubGlobal('fetch',vi.fn(async(path:string,options?:RequestInit)=>options?.method==='PUT'?new Response(JSON.stringify({error:{message:'API ID unavailable'}}),{status:422}):new Response(JSON.stringify(path.includes('/accounts')?[]:[model]))));
+it('keeps a rejected policy and server error inside its editor for correction',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async(path:string,options?:RequestInit)=>options?.method==='PUT'?json({error:{message:'API ID unavailable'}},422):json(path.includes('/accounts')?[]:[model])));
   const user=userEvent.setup();render(<Admin token="admin-token"/>);
-  await screen.findByText('Disabled');await user.click(screen.getByRole('button',{name:'Save model policy'}));
-  expect(await screen.findByText('API ID unavailable')).toBeInTheDocument();
+  await user.click(await screen.findByRole('button',{name:'Edit GPT 6 luna'}));
+  const dialog=screen.getByRole('dialog');
+  await user.clear(within(dialog).getByLabelText('Provider API identifier'));
+  await user.type(within(dialog).getByLabelText('Provider API identifier'),'not-available');
+  await user.click(within(dialog).getByRole('button',{name:'Save model policy'}));
+  expect(await within(dialog).findByText('API ID unavailable')).toBeInTheDocument();
+  expect(within(dialog).getByLabelText('Provider API identifier')).toHaveValue('not-available');
 });
 
-it('requires a sufficiently long account password before account creation',async()=>{
-  vi.stubGlobal('fetch',vi.fn(async()=>new Response('[]')));
-  render(<Admin token="admin-token"/>);
-  expect(screen.getByRole('button',{name:'Create account'})).toBeDisabled();
+it('protects unsaved edits and restores row focus when changes are discarded',async()=>{
+  mockModels([model,second]);const user=userEvent.setup();render(<Admin token="admin-token"/>);
+  const edit=await screen.findByRole('button',{name:'Edit Mistral Medium'});
+  await user.click(edit);
+  await user.clear(screen.getByLabelText('Display label'));await user.type(screen.getByLabelText('Display label'),'Changed name');
+  await user.click(screen.getByRole('button',{name:'Cancel'}));
+  expect(screen.getByRole('dialog',{name:'Discard model changes?'})).toBeInTheDocument();
+  await user.click(screen.getByRole('button',{name:'Keep editing'}));
+  expect(screen.getByLabelText('Display label')).toHaveValue('Changed name');
+  await user.click(screen.getByRole('button',{name:'Cancel'}));
+  await user.click(screen.getByRole('button',{name:'Discard changes'}));
+  await waitFor(()=>expect(screen.queryByRole('dialog')).not.toBeInTheDocument());
+  expect(edit).toHaveFocus();
+  expect(vi.mocked(fetch).mock.calls.some(call=>call[1]?.method==='PUT')).toBe(false);
+  await user.click(screen.getByRole('button',{name:'Edit GPT 6 luna'}));
+  expect(screen.getByLabelText('Display label')).toHaveValue('GPT 6 luna');
+});
+
+it('shows field validation and keeps creation separate from existing policies',async()=>{
+  mockModels();const user=userEvent.setup();render(<Admin token="admin-token"/>);
+  await screen.findByText('Disabled');await user.click(screen.getByRole('button',{name:'Create model policy'}));
+  await user.click(screen.getByRole('button',{name:'Save model policy'}));
+  expect(screen.getByText('Enter a registry identifier.')).toBeInTheDocument();
+  expect(screen.getByText('Enter a display label.')).toBeInTheDocument();
+  await user.click(within(screen.getByTestId('admin-model-preset-select')).getByRole('button'));
+  await user.click(screen.getByRole('option',{name:'GPT 6 luna'}));
+  await user.click(screen.getByRole('button',{name:'Save model policy'}));
+  expect(screen.getByText('This identifier already exists. Edit that model instead.')).toBeInTheDocument();
+  expect(screen.getByRole('checkbox',{name:'Enabled for agent use'})).not.toBeChecked();
+  expect(vi.mocked(fetch).mock.calls.some(call=>call[1]?.method==='PUT')).toBe(false);
+});
+
+it('validates account fields without a request and submits the same account contract',async()=>{
+  mockModels();const user=userEvent.setup();render(<Admin token="admin-token" section="accounts"/>);
+  await user.click(screen.getByRole('button',{name:'Create account'}));
+  const dialog=screen.getByRole('dialog');
+  await user.click(within(dialog).getByRole('button',{name:'Create account'}));
+  expect(screen.getByText('Enter a username.')).toBeInTheDocument();
+  expect(screen.getByText('Use a password between 12 and 256 characters.')).toBeInTheDocument();
+  expect(vi.mocked(fetch).mock.calls.some(call=>call[1]?.method==='POST')).toBe(false);
+  await user.type(screen.getByLabelText('New username'),'fixture-user');
+  await user.type(screen.getByLabelText('Initial password'),'fixture-password-long');
+  await user.click(within(dialog).getByRole('button',{name:'Create account'}));
+  expect(await screen.findByText('Account fixture-user created.')).toBeInTheDocument();
+  const call=vi.mocked(fetch).mock.calls.find(call=>call[1]?.method==='POST')!;
+  expect(JSON.parse(String(call[1]!.body))).toEqual({username:'fixture-user',password:'fixture-password-long',role:'user'});
+});
+
+it('filters the model collection and provides recovery from zero matches',async()=>{
+  mockModels([model,second]);const user=userEvent.setup();render(<Admin token="admin-token"/>);
+  await screen.findByRole('button',{name:'Edit Mistral Medium'});
+  await user.type(screen.getByRole('searchbox',{name:'Find models'}),'mistral');
+  expect(screen.queryByRole('button',{name:'Edit GPT 6 luna'})).not.toBeInTheDocument();
+  await user.clear(screen.getByRole('searchbox',{name:'Find models'}));
+  await user.type(screen.getByRole('searchbox',{name:'Find models'}),'no-match');
+  expect(screen.getByText('No matches')).toBeInTheDocument();
+  await user.click(screen.getByRole('button',{name:'Clear filter'}));
+  expect(screen.getByRole('button',{name:'Edit GPT 6 luna'})).toBeInTheDocument();
 });

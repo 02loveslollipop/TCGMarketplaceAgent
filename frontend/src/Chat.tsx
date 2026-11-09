@@ -1,5 +1,6 @@
 import {useEffect,useRef,useState} from 'react';
 import {Alert,Box,Button,Container,ExpandableSection,FormField,Header,PromptInput,Select,SpaceBetween,StatusIndicator} from '@cloudscape-design/components';
+import {colorBackgroundLayoutMain} from '@cloudscape-design/design-tokens';
 import ChatBubble from '@cloudscape-design/chat-components/chat-bubble';
 import {api,stream} from './client';
 import type {AgentEvent,Conversation,Decision,Model,Question} from './contracts';
@@ -9,13 +10,13 @@ import {DecisionPanel} from './DecisionPanel';
 type TranscriptEvent=AgentEvent|{type:'user';data:{text:string}};
 
 export function Chat({token}:{token:string}) {
-  const [models,setModels]=useState<Model[]>([]),[modelId,setModelId]=useState(''),[text,setText]=useState('');
-  const [events,setEvents]=useState<TranscriptEvent[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false);
+  const [models,setModels]=useState<Model[]>([]),[modelId,setModelId]=useState(''),[text,setText]=useState(''),[modelNotice,setModelNotice]=useState('');
+  const [events,setEvents]=useState<TranscriptEvent[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[modelsLoading,setModelsLoading]=useState(true),[historyLoading,setHistoryLoading]=useState(false);
   const [question,setQuestion]=useState<Question|null>(null),[execution,setExecution]=useState(''),[conversation,setConversation]=useState<string|undefined>();
   const [conversations,setConversations]=useState<Conversation[]>([]);
   const controller=useRef<AbortController|null>(null);
   useEffect(()=>{
-    void api<Model[]>('/api/chat/models',token).then(items=>{setModels(items);setModelId(items[0]?.id||'');}).catch(error=>setError(error.message));
+    void api<Model[]>('/api/chat/models',token).then(items=>{setModels(items);setModelNotice('');setModelId(items[0]?.id||'');}).catch(error=>setError(error.message)).finally(()=>setModelsLoading(false));
     void api<Conversation[]>('/api/chat/conversations',token).then(setConversations).catch(error=>setError(error.message));
     return ()=>controller.current?.abort();
   },[token]);
@@ -32,36 +33,45 @@ export function Chat({token}:{token:string}) {
     catch(error) {if((error as Error).name!=='AbortError')setError((error as Error).message);}
     finally {setBusy(false);void api<Conversation[]>('/api/chat/conversations',token).then(setConversations).catch(error=>setError(error.message));}
   }
-  function send() {if(!text.trim()||busy||!modelId||question)return;setEvents(previous=>[...previous,{type:'user',data:{text}}]);void run('/api/chat/executions',{text,model_id:modelId,conversation_id:conversation});setText('');}
+  function send() {if(!text.trim()||busy||historyLoading||!modelId||question)return;setEvents(previous=>[...previous,{type:'user',data:{text}}]);void run('/api/chat/executions',{text,model_id:modelId,conversation_id:conversation});setText('');}
   function decide(decision:Decision) {setEvents(previous=>[...previous,{type:'user',data:{text:decision.text||decision.action}}]);void run(`/api/chat/executions/${execution}/resume`,decision);}
   async function load(id:string) {
-    setConversation(id);setEvents([]);setQuestion(null);
-    const history=await api<{role:string;content:{text?:string;type?:string;data?:unknown;execution_id?:string}}[]>(`/api/chat/conversations/${id}`,token);
-    const restored=history.flatMap(row=>row.role==='user'&&row.content.text?[{type:'user',data:{text:row.content.text}} as TranscriptEvent]:row.role==='assistant'&&row.content.type?[{type:row.content.type,data:row.content.data} as TranscriptEvent]:[]);
-    setEvents(restored);
-    const last=history.at(-1);
-    if(last?.content.type==='question'&&last.content.execution_id) {
-      const execution=await api<{status:string}>(`/api/chat/executions/${last.content.execution_id}`,token);
-      if(execution.status==='waiting'){setQuestion(last.content.data as Question);setExecution(last.content.execution_id);}
-    }
+    setHistoryLoading(true);setError('');
+    try {
+      const history=await api<{role:string;content:{text?:string;type?:string;data?:unknown;execution_id?:string}}[]>(`/api/chat/conversations/${id}`,token);
+      const restored=history.flatMap(row=>row.role==='user'&&row.content.text?[{type:'user',data:{text:row.content.text}} as TranscriptEvent]:row.role==='assistant'&&row.content.type?[{type:row.content.type,data:row.content.data} as TranscriptEvent]:[]);
+      let waitingQuestion:Question|null=null,waitingExecution='';
+      const last=history.at(-1);
+      if(last?.content.type==='question'&&last.content.execution_id) {
+        const execution=await api<{status:string}>(`/api/chat/executions/${last.content.execution_id}`,token);
+        if(execution.status==='waiting'){waitingQuestion=last.content.data as Question;waitingExecution=last.content.execution_id;}
+      }
+      setConversation(id);setEvents(restored);setQuestion(waitingQuestion);setExecution(waitingExecution);
+    } catch(error){setError((error as Error).message);} finally{setHistoryLoading(false);}
   }
+  const selectedModel=models.find(model=>model.id===modelId);
+  const locked=busy||historyLoading;
   return <SpaceBetween size="l">
-    <Header variant="h1" description="Research decks, verify card printings and compare sourced quotations." actions={<Button data-testid="new-conversation-button" disabled={busy} onClick={()=>{setConversation(undefined);setEvents([]);setQuestion(null);}}>New conversation</Button>}>Pokémon deck agent</Header>
-    {error&&<Alert data-testid="chat-error" type="error">{error}</Alert>}
-    <SpaceBetween direction="horizontal" size="m">
-      <FormField label="Model"><Select data-testid="model-select" disabled={busy} selectedOption={models.find(model=>model.id===modelId)?{label:models.find(model=>model.id===modelId)!.label,value:modelId}:null} options={models.map(model=>({label:model.label,value:model.id,description:`${model.provider} · ${model.api_id}`}))} onChange={({detail})=>setModelId(detail.selectedOption.value||'')} placeholder="An administrator must enable a model"/></FormField>
-      <FormField label="Conversation history"><Select data-testid="conversation-select" disabled={busy} selectedOption={conversation?{label:conversations.find(row=>row.id===conversation)?.title||'Current conversation',value:conversation}:null} options={conversations.map(row=>({label:row.title,value:row.id}))} onChange={({detail})=>{void load(detail.selectedOption.value!).catch(error=>setError(error.message));}} placeholder="Select a conversation"/></FormField>
-    </SpaceBetween>
-    <Container header={<Header variant="h2">Agent activity</Header>}>
+    <Header variant="h1" description="Research decks, verify card printings and compare sourced quotations.">Deck agent</Header>
+    {error&&<Alert data-testid="chat-error" type="error" header="Unable to complete the request" dismissible onDismiss={()=>setError('')}>{error}</Alert>}
+    <Container header={<Header variant="h2" actions={<Button data-testid="new-conversation-button" disabled={locked} onClick={()=>{setConversation(undefined);setEvents([]);setQuestion(null);setError('');}}>New conversation</Button>}>Conversation settings</Header>}>
+      <SpaceBetween size="m">
+        <div className="chat-controls-grid">
+          <FormField label="Model" description={question?'Applies to your next new request. The waiting execution keeps its original model.':'Used for your next request.'}><Select data-testid="model-select" disabled={locked} statusType={modelsLoading?'loading':'finished'} loadingText="Loading models" expandToViewport selectedOption={selectedModel?{label:selectedModel.label,value:modelId}:null} options={models.map(model=>({label:model.label,value:model.id,description:model.provider==='openai'?'OpenAI':'Mistral'}))} onChange={({detail})=>{const next=models.find(model=>model.id===detail.selectedOption.value);setModelId(detail.selectedOption.value||'');setModelNotice(`Model changed to ${next?.label}. Your next request will use this model.`);}} placeholder="No enabled models"/></FormField>
+          <FormField label="Conversation history" description="Reopen a previous conversation, or start a new one."><Select data-testid="conversation-select" disabled={locked} expandToViewport selectedOption={conversation?{label:conversations.find(row=>row.id===conversation)?.title||'Current conversation',value:conversation}:null} options={conversations.map(row=>({label:row.title,value:row.id}))} onChange={({detail})=>void load(detail.selectedOption.value!)} empty="No previous conversations" placeholder="New conversation"/></FormField>
+        </div>
+        <div role="status" aria-live="polite" data-testid="active-model-summary"><StatusIndicator type={modelsLoading?'loading':selectedModel?'success':'warning'}>{modelsLoading?'Loading models…':modelNotice|| (selectedModel?`Active model: ${selectedModel.label}`:'An administrator must enable a model before you can send a request.')}</StatusIndicator></div>
+      </SpaceBetween>
+    </Container>
+    <Container header={events.length||locked?<Header variant="h2" info={<StatusIndicator type={locked?'loading':question?'pending':'info'}>{historyLoading?'Loading conversation':busy?'Working':question?'Your input needed':events.length?'Ready for a follow-up':'Ready'}</StatusIndicator>} actions={busy&&<Button data-testid="chat-cancel-button" onClick={()=>controller.current?.abort()}>Stop execution</Button>}>Conversation</Header>:undefined}>
       <SpaceBetween size="m">
         {events.map((event,index)=>event.type==='user'?<ChatBubble key={index} type="outgoing" avatar={<Box>You</Box>} ariaLabel={`Your request ${index+1}`}>{event.data.text}</ChatBubble>:event.type==='progress'?<StatusIndicator key={index} type="info">{event.data.message}</StatusIndicator>:event.type==='cards'&&events.slice(index+1).find(item=>item.type==='result'||item.type==='user')?.type!=='result'?<CardResults key={index} {...event.data}/>:event.type==='question'?<ChatBubble key={index} type="incoming" avatar={<Box>Agent</Box>} ariaLabel="Agent question">{event.data.question}</ChatBubble>:event.type==='result'?<ChatBubble key={index} type="incoming" avatar={<Box>Agent</Box>} ariaLabel="Agent budget result" stretch><BudgetResults result={event.data}/></ChatBubble>:null)}
         {busy&&<StatusIndicator type="loading">Agent is working</StatusIndicator>}
-        {!events.length&&<Box>Describe your deck or cards, including format and any printing, language or condition preferences.</Box>}
+        {!events.length&&!historyLoading&&<div className="chat-empty-state"><SpaceBetween size="m"><Header variant="h2">What are you building?</Header><Box color="text-body-secondary">Describe your deck or cards, including format and any printing, language or condition preferences.</Box><Box fontSize="body-s">For example: “Find cards for an M Lucario deck in Expanded, in English and near mint.”</Box></SpaceBetween></div>}
       </SpaceBetween>
     </Container>
-    {question&&<DecisionPanel key={events.length} question={question} onDecision={decide} busy={busy}/>}
-    <PromptInput data-testid="chat-prompt-input" nativeTextareaAttributes={{'data-testid':'chat-prompt-textarea'}} ariaLabel="Purchase request" value={text} onChange={({detail})=>setText(detail.value)} onAction={send} disabled={busy||!!question||!modelId} customPrimaryAction={<Button data-testid="chat-send-button" variant="primary" disabled={!text.trim()||busy||!!question||!modelId} onClick={send}>Send request</Button>} placeholder="Build a deck or find exact cards…"/>
-    {busy&&<Button data-testid="chat-cancel-button" onClick={()=>controller.current?.abort()}>Stop execution</Button>}
+    {question&&<DecisionPanel key={events.length} question={question} onDecision={decide} busy={locked}/>}
+    <div className="chat-composer" style={{backgroundColor:colorBackgroundLayoutMain}}><FormField label="Purchase request" description={question?'Answer the agent above to continue.':selectedModel?`Send with ${selectedModel.label}. Prices and availability are checked against supplier sources.`:undefined}><PromptInput data-testid="chat-prompt-input" nativeTextareaAttributes={{'data-testid':'chat-prompt-textarea'}} ariaLabel="Purchase request" value={text} onChange={({detail})=>setText(detail.value)} onAction={send} disabled={locked||!!question||!modelId} customPrimaryAction={<Button data-testid="chat-send-button" variant="primary" disabled={!text.trim()||locked||!!question||!modelId} onClick={send}>Send request</Button>} placeholder="Build a deck or find exact cards…"/></FormField></div>
     <ExpandableSection data-testid="limitations-section" headerText="How budgets are calculated"><Box>Prices are compared within each currency. Unknown shipping stays unknown. Missing cards require your explicit decision. Results retain sources and retrieval dates.</Box></ExpandableSection>
   </SpaceBetween>;
 }

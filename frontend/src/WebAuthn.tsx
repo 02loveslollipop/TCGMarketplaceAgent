@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState} from 'react';
-import {Alert,Box,Button,ExpandableSection,FormField,Input,SpaceBetween,Table} from '@cloudscape-design/components';
+import {Alert,Box,Button,ExpandableSection,FormField,Input,Modal,SpaceBetween,Table} from '@cloudscape-design/components';
 import {startAuthentication,startRegistration,WebAuthnAbortService} from '@simplewebauthn/browser';
 import type {PublicKeyCredentialCreationOptionsJSON,PublicKeyCredentialRequestOptionsJSON} from '@simplewebauthn/browser';
 import {api} from './client';
@@ -54,6 +54,9 @@ export function WebAuthnLogin({challengeToken,disabled,onAuthenticated,onBusy,on
 
 export function WebAuthnSettings({token,onChange}:{token:string;onChange:()=>void}) {
   const [credentials,setCredentials]=useState<Credential[]>([]),[name,setName]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
+  const [removing,setRemoving]=useState<Credential|null>(null),[removalError,setRemovalError]=useState('');
+  const removeTrigger=useRef<HTMLElement|null>(null);
+  useEffect(()=>{if(!removing)removeTrigger.current?.focus();},[removing]);
   const ceremony=useRef<string|null>(null);
   const cancelled=useRef(false);
   useEffect(()=>{void api<Credential[]>('/api/auth/webauthn/credentials',token).then(setCredentials).catch(error=>setError(error.message));return()=>WebAuthnAbortService.cancelCeremony();},[token]);
@@ -73,8 +76,8 @@ export function WebAuthnSettings({token,onChange}:{token:string;onChange:()=>voi
     finally{setBusy(false);}
   }
   async function remove(id:string) {
-    setBusy(true);setError('');
-    try{await api(`/api/auth/webauthn/credentials/${id}`,token,{method:'DELETE'});onChange();}catch(error){setError((error as Error).message);}finally{setBusy(false);}
+    if(busy)return;setBusy(true);setRemovalError('');
+    try{await api(`/api/auth/webauthn/credentials/${id}`,token,{method:'DELETE'});setRemoving(null);onChange();}catch(error){setRemovalError((error as Error).message);}finally{setBusy(false);}
   }
   return <ExpandableSection data-testid="webauthn-settings-section" headerText="Passkeys and security keys"><SpaceBetween size="m">
     <Box>Use your browser’s chooser to add a password-manager passkey or a physical security key. You will still enter your password before using it to sign in. Adding or removing an authenticator requires signing in again.</Box>
@@ -82,10 +85,11 @@ export function WebAuthnSettings({token,onChange}:{token:string;onChange:()=>voi
     <Table data-testid="webauthn-credentials-table" items={credentials} empty={<Box>No passkeys or security keys enrolled.</Box>} columnDefinitions={[
       {id:'name',header:'Authenticator',cell:credential=>credential.name},
       {id:'created',header:'Enrolled',cell:credential=>new Date(credential.created_at).toLocaleString()},
-      {id:'remove',header:'Manage',cell:credential=><Button data-testid="webauthn-remove-button" disabled={busy} onClick={()=>void remove(credential.id)}>Remove {credential.name}</Button>}
+      {id:'remove',header:'Manage',cell:credential=><Button data-testid="webauthn-remove-button" variant="inline-link" disabled={busy} onClick={()=>{removeTrigger.current=document.activeElement as HTMLElement;setRemovalError('');setRemoving(credential);}}>Remove {credential.name}</Button>}
     ]}/>
     <FormField label="Authenticator name" description="For example, Google Password Manager or Physical security key."><Input data-testid="webauthn-name-input" value={name} disabled={busy} onChange={({detail})=>setName(detail.value)}/></FormField>
     <Button data-testid="webauthn-enroll-button" disabled={busy||!name.trim()} loading={busy} onClick={()=>void enroll()}>Add passkey or security key</Button>
     {busy&&<Button data-testid="webauthn-enroll-cancel-button" onClick={()=>{cancelled.current=true;WebAuthnAbortService.cancelCeremony();}}>Cancel authenticator</Button>}
+    {removing&&<Modal visible header={`Remove ${removing.name}?`} closeAriaLabel="Close removal confirmation" onDismiss={()=>{if(!busy)setRemoving(null);}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" disabled={busy} onClick={()=>setRemoving(null)}>Cancel</Button><Button variant="primary" loading={busy} onClick={()=>void remove(removing.id)}>Remove authenticator</Button></SpaceBetween></Box>}><SpaceBetween size="m"><Box>You will no longer be able to use {removing.name} to sign in. Removing it signs you out. Make sure you have another sign-in or recovery method available.</Box>{removalError&&<Alert type="error">{removalError}</Alert>}</SpaceBetween></Modal>}
   </SpaceBetween></ExpandableSection>;
 }

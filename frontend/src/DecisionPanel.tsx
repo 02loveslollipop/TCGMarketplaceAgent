@@ -5,7 +5,7 @@ import type {Decision,Question} from './contracts';
 export function DecisionPanel({question,onDecision,busy}:{question:Question;onDecision:(decision:Decision)=>void;busy:boolean}) {
   const [text,setText]=useState(''),[approved,setApproved]=useState(false);
   const missing=question.kind==='missing_cards';
-  return <Container header={<Header variant="h3">{missing?'Missing cards · Your decision':'Clarification'}</Header>}>
+  return <Container header={<Header variant="h2">{missing?'Missing cards · Your decision':'Clarification'}</Header>}>
     <SpaceBetween size="m">
       <Alert type="info">{question.question}</Alert>
       {question.missing&&<>{question.missing.map((card,index)=><div key={`${card.card_id}-${index}`}>
@@ -18,10 +18,10 @@ export function DecisionPanel({question,onDecision,busy}:{question:Question;onDe
       {missing&&<Checkbox data-testid="missing-consent-checkbox" checked={approved} onChange={({detail})=>setApproved(detail.checked)}>I explicitly approve the action below for the missing cards listed above.</Checkbox>}
       <SpaceBetween size="s" direction="horizontal">
         {missing?<>
-          <Button data-testid="substitute-submit-button" disabled={busy||!approved||!text.trim()} onClick={()=>onDecision({action:'substitute',text,approved:true})}>Research substitutes</Button>
+          <Button data-testid="substitute-submit-button" variant="primary" disabled={busy||!approved||!text.trim()} onClick={()=>onDecision({action:'substitute',text,approved:true})}>Research substitutes</Button>
           <Button data-testid="keep-missing-button" disabled={busy||!approved} onClick={()=>onDecision({action:'keep_missing',approved:true})}>Keep listed cards missing</Button>
         </>:<Button data-testid="clarification-submit-button" variant="primary" disabled={busy||!text.trim()} onClick={()=>onDecision({action:'clarify',text})}>Continue</Button>}
-        <Button data-testid="decision-cancel-button" disabled={busy} onClick={()=>onDecision({action:'cancel'})}>Cancel execution</Button>
+        <Button data-testid="decision-cancel-button" variant="link" disabled={busy} onClick={()=>onDecision({action:'cancel'})}>Cancel execution</Button>
       </SpaceBetween>
     </SpaceBetween>
   </Container>;

@@ -1,0 +1,33 @@
+#workspace-top-navigation {
+  position: sticky;
+  top: 0;
+  z-index: 1001;
+}
+
+[hidden] { display: none !important; }
+
+.chat-controls-grid {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+  gap: 24px;
+}
+
+.chat-empty-state {
+  padding: 16px;
+  max-width: 640px;
+  margin: auto;
+  text-align: center;
+}
+
+.chat-composer {
+  position: sticky;
+  bottom: 0;
+  z-index: 800;
+  min-width: 0;
+  padding-block: 12px;
+}
+.card-art { display: block; max-width: 100%; height: auto; margin: auto; }
+
+@media (max-width: 700px) {
+  .chat-controls-grid { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+}
