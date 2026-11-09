@@ -1,7 +1,8 @@
 import {useEffect,useRef,useState} from 'react';
-import {Alert,Box,Button,Checkbox,ColumnLayout,Container,Flashbar,Form,FormField,Header,Input,KeyValuePairs,Modal,Pagination,Select,SpaceBetween,StatusIndicator,Table,TextFilter} from '@cloudscape-design/components';
+import {Alert,Box,Button,Checkbox,Flashbar,Form,FormField,Header,Input,Modal,Pagination,Select,SpaceBetween,StatusIndicator,Table,TextFilter} from '@cloudscape-design/components';
 import {api} from './client';
 import {RolePolicies} from './RolePolicies';
+import {Overview} from './Overview';
 import type {Model} from './contracts';
 
 interface Account {id:string;username:string;role:string;active:boolean}
@@ -61,7 +62,7 @@ export function Admin({token,section='models',onNavigate,onSessionChange}:{token
   const editorTrigger=useRef<HTMLElement|null>(null);
   useEffect(()=>{if(!editing&&!creatingAccount&&!roleAccount)editorTrigger.current?.focus();},[editing,creatingAccount,roleAccount]);
   async function refresh(){const [accounts,models]=await Promise.all([api<Account[]>('/api/admin/accounts',token),api<Model[]>('/api/admin/models',token)]);setAccounts(accounts);setModels(models);}
-  useEffect(()=>{void refresh().catch(error=>setError(error.message)).finally(()=>setLoading(false));},[token]);
+  useEffect(()=>{if(section==='overview'||section==='roles')return;setError('');setLoading(true);void refresh().catch(error=>setError(error.message)).finally(()=>setLoading(false));},[token,section]);
   useEffect(()=>{setFilter('');setPage(1);},[section]);
   // A successful mutation stays successful if the subsequent list refresh fails.
   async function reload(){try{await refresh();}catch{setError('Your change was saved, but the list could not be refreshed. Refresh the page to see the latest data.');}}
@@ -74,18 +75,10 @@ export function Admin({token,section='models',onNavigate,onSessionChange}:{token
   const pagination=<Pagination currentPageIndex={currentPage} pagesCount={Math.max(1,Math.ceil(rows.length/10))} onChange={({detail})=>setPage(detail.currentPageIndex)} ariaLabels={{nextPageLabel:'Next page',previousPageLabel:'Previous page',pageLabel:page=>`Page ${page}`}}/>;
   return <SpaceBetween size="l">
     <div hidden={section==='roles'}><SpaceBetween size="l">
-    <Header variant="h1" description={section==='overview'?'Manage access and the models available to the deck agent.':section==='accounts'?'Manage who can use this private workspace.':'Control which models appear in chat and the provider identifiers they use.'} actions={section!=='overview'&&<Button variant="primary" onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setNotice('');if(section==='accounts')setCreatingAccount(true);else{setCreatingModel(true);setEditing(newModel());}}}>{section==='accounts'?'Create account':'Create model policy'}</Button>}>{section==='overview'?'Administration':section==='accounts'?'Accounts':'Model policies'}</Header>
-    {error&&<Alert type="error" dismissible onDismiss={()=>setError('')}>{error}</Alert>}
+    {section!=='overview'&&<Header variant="h1" description={section==='accounts'?'Manage who can use this private workspace.':'Control which models appear in chat and the provider identifiers they use.'} actions={<Button variant="primary" onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setNotice('');if(section==='accounts')setCreatingAccount(true);else{setCreatingModel(true);setEditing(newModel());}}}>{section==='accounts'?'Create account':'Create model policy'}</Button>}>{section==='accounts'?'Accounts':'Model policies'}</Header>}
+    {section!=='overview'&&error&&<Alert type="error" dismissible onDismiss={()=>setError('')}>{error}</Alert>}
     <Flashbar items={notice?[{id:'admin-success',type:'success',content:notice,dismissible:true,dismissLabel:'Dismiss notification',onDismiss:()=>setNotice('')}]:[]}/>
-    {section==='overview'?<>
-      <Container header={<Header variant="h2">Workspace overview</Header>}><ColumnLayout columns={3} variant="text-grid">
-        <KeyValuePairs items={[{label:'Accounts',value:loading?'Loading…':`${accounts.length}`},{label:'Active accounts',value:loading?'Loading…':`${accounts.filter(item=>item.active).length}`}]} />
-        <KeyValuePairs items={[{label:'Model policies',value:loading?'Loading…':`${models.length}`},{label:'Enabled in chat',value:loading?'Loading…':`${models.filter(item=>item.enabled).length}`}]} />
-        <KeyValuePairs items={[{label:'Access',value:'Private workspace'},{label:'Model verification',value:'Required when enabling'}]} />
-      </ColumnLayout></Container>
-      <Container header={<Header variant="h2" actions={<Button onClick={()=>onNavigate?.('roles')}>Manage role access</Button>}>Role access and quotas</Header>}><Box>Manage User and Administrator model access and daily token quotas.</Box></Container>
-      <ColumnLayout columns={2}><Container header={<Header variant="h2" actions={<Button onClick={()=>onNavigate?.('accounts')}>View accounts</Button>}>Accounts</Header>}><Box>Create user or administrator accounts. New account holders enroll an authenticator at sign-in.</Box></Container><Container header={<Header variant="h2" actions={<Button onClick={()=>onNavigate?.('models')}>View model policies</Button>}>Models</Header>}><Box>Review availability, edit model settings, or add a provider model.</Box></Container></ColumnLayout>
-    </>:section==='accounts'?<Table data-testid="admin-accounts-table" loading={loading} loadingText="Loading accounts" trackBy="id" header={<Header variant="h2" counter={`(${accounts.length})`}>Accounts</Header>} filter={tableFilter} pagination={pagination} items={filteredAccounts.slice((currentPage-1)*10,currentPage*10)} empty={empty} columnDefinitions={[
+    {section==='overview'?<Overview token={token} onNavigate={onNavigate}/>:section==='accounts'?<Table data-testid="admin-accounts-table" loading={loading} loadingText="Loading accounts" trackBy="id" header={<Header variant="h2" counter={`(${accounts.length})`}>Accounts</Header>} filter={tableFilter} pagination={pagination} items={filteredAccounts.slice((currentPage-1)*10,currentPage*10)} empty={empty} columnDefinitions={[
       {id:'username',header:'Username',cell:row=>row.username},{id:'role',header:'Role',cell:row=>row.role==='admin'?'Administrator':'User'},{id:'active',header:'State',cell:row=><StatusIndicator type={row.active?'success':'stopped'}>{row.active?'Active':'Disabled'}</StatusIndicator>},
       {id:'actions',header:'Actions',cell:row=><Button variant="inline-link" ariaLabel={`Change role for ${row.username}`} onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setRoleAccount(row);setNewRole(row.role);setRoleError('');}}>Change role</Button>}
     ]}/>:<>
