@@ -3,7 +3,8 @@ from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, HttpUrl
+from pydantic import BaseModel, ConfigDict, Field, HttpUrl, model_validator
+from shared.image_context import ImageContext
 
 
 def utcnow() -> datetime:
@@ -80,11 +81,18 @@ class Decision(Contract):
 
 
 class ChatInput(Contract):
-    text: str = Field(min_length=1, max_length=8000)
+    text: str = Field(default="", max_length=8000)
+    images: list[ImageContext] = Field(default_factory=list, max_length=3)
     model_id: str
     conversation_id: str | None = None
 
+    @model_validator(mode="after")
+    def require_context(self):
+        if not self.text.strip() and not self.images:
+            raise ValueError("A request or image context is required.")
+        return self
+
 
 class StreamEvent(Contract):
-    type: Literal["progress", "cards", "question", "result", "error", "done", "execution"]
+    type: Literal["progress", "cards", "question", "result", "error", "done", "execution", "thinking", "tool"]
     data: dict

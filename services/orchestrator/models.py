@@ -4,6 +4,7 @@ import asyncio
 from contextvars import ContextVar
 from langchain_core.callbacks import BaseCallbackHandler
 from shared.role_policy import RolePolicies, PolicyError
+from services.orchestrator.trace import ReasoningSummaryCallback
 import httpx
 from langchain_openai import ChatOpenAI
 from langchain_mistralai import ChatMistralAI
@@ -58,7 +59,7 @@ class GuardedModel:
         async def invoke_and_account():
             callback=TokenUsageCallback();rejected=False
             try:
-                result=await self.runnable.ainvoke(messages,config={"callbacks":[callback]})
+                result=await self.runnable.ainvoke(messages,config={"callbacks":[callback,ReasoningSummaryCallback()]})
                 if callback.usage is None:callback.capture(result)
             except BaseException as error:
                 rejected=getattr(error,"status_code",None) in {400,401,403,404,413,422,429}
@@ -88,7 +89,10 @@ def model_for(policy):
         key = os.getenv("OPENAI_API_KEY", "")
         if not key:
             raise ModelUnavailable("OpenAI credential is not configured.")
-        return ChatOpenAI(model=policy.api_id, api_key=key, timeout=90, max_retries=0)
+        options={}
+        if policy.api_id.startswith(("gpt-5", "gpt-6", "o3", "o4")) and "chat" not in policy.api_id:
+            options={"use_responses_api":True,"output_version":"responses/v1","reasoning":{"effort":"medium","summary":"auto"},"include":["reasoning.encrypted_content"],"streaming":True,"stream_usage":True,"store":False}
+        return ChatOpenAI(model=policy.api_id, api_key=key, timeout=90, max_retries=0, **options)
     if policy.provider == "mistral":
         key = os.getenv("MISTRAL_API_KEY", "")
         if not key:

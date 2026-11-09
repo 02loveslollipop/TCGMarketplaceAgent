@@ -10,10 +10,12 @@ from services.orchestrator.budget import budgets
 from services.orchestrator.checkpoints import DatabaseSaver
 from services.orchestrator.suppliers import SupplierError
 from services.orchestrator.progress import progress
+from services.orchestrator.trace import tool_start,tool_end
 
 
 class State(TypedDict, total=False):
     request: str
+    images: list
     history: list
     knowledge: dict
     plan: dict
@@ -45,9 +47,17 @@ class DeckAgent:
 
     async def understand(self, state):
         progress("legality","Retrieving current dated format and banned-card evidence.")
-        knowledge = await self.planner.research.legality_knowledge()
+        trace,public=tool_start("current_legality",{})
+        try:
+            knowledge = await self.planner.research.legality_knowledge()
+            tool_end(trace,"current_legality",public,"complete",knowledge.get("official_sources",[]))
+        except Exception:
+            tool_end(trace,"current_legality",public,"error")
+            raise
+        if state.get("images"):
+            progress("context",f"Using {len(state['images'])} image attachments as context; card identities still require source verification.")
         progress("understand","Resolving the request with sourced card and deck research.")
-        plan = await self.planner.resolve(state["request"], state.get("history",[]), knowledge)
+        plan = await self.planner.resolve(state["request"], state.get("history",[]), knowledge, **({"images":state["images"]} if state.get("images") else {}))
         return {"knowledge":knowledge, "plan":plan.model_dump(mode="json"), "consent":{},
                 "event":{"type":"progress", "data":{"step":"understand", "message":plan.question or "Resolved actual card/deck identities and preferences."}}}
 
@@ -69,10 +79,14 @@ class DeckAgent:
         offers, errors = [], []
         for card in AgentPlan.model_validate(state["plan"]).cards:
             for supplier in ("TCGplayer", "Cardmarket"):
+                trace,public=tool_start("quote_supplier",{"supplier":supplier,"card_id":card.card_id})
                 try:
                     progress("quote",f"Checking {supplier} quotations for {card.name}.")
-                    offers.extend(await self.suppliers.quote(supplier, card))
+                    found=await self.suppliers.quote(supplier, card)
+                    offers.extend(found)
+                    tool_end(trace,"quote_supplier",public,"complete",[offer.source for offer in found])
                 except SupplierError as error:
+                    tool_end(trace,"quote_supplier",public,"error")
                     message = {"supplier":supplier, "message":str(error)}
                     if message not in errors:
                         errors.append(message)

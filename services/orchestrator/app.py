@@ -2,7 +2,7 @@ import asyncio
 from contextlib import suppress
 import json
 from fastapi import Depends, HTTPException, Request
-from fastapi.responses import StreamingResponse
+from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from shared.api import application, require_admin
 from shared.contracts import ChatInput, Decision
@@ -18,6 +18,17 @@ class VerificationInput(BaseModel):
 
 def create_app(repo, current, agent_factory, verifier=verify_api_id):
     app = application("Pokemon agent orchestration")
+
+    @app.middleware("http")
+    async def limit_image_request(request, call_next):
+        if request.method == "POST" and request.url.path == "/executions":
+            body=bytearray()
+            async for chunk in request.stream():
+                body.extend(chunk)
+                if len(body) > 9 * 1024 * 1024:
+                    return JSONResponse(status_code=413,content={"error":{"message":"Image context exceeds the request limit."}})
+            request._body=bytes(body)
+        return await call_next(request)
 
     async def allowed(model_id,user):
         try:RolePolicies(repo).check_available(user.id,user.role,model_id)
@@ -81,7 +92,7 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
                         event = pending.result()
                     except StopAsyncIteration:
                         break
-                    if event["type"] in {"result","question"}:
+                    if event["type"] in {"result","question"} or event["type"] in {"thinking","tool"} and event["data"].get("status") != "loading":
                         repo.add_message(execution.conversation_id,user.id,"assistant",{**event,"execution_id":execution.id})
                     yield f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
             except asyncio.CancelledError:
@@ -105,11 +116,11 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
     @app.post("/executions")
     async def start(body: ChatInput,request: Request,user=Depends(current)):
         policy = await allowed(body.model_id,user)
-        conversation = repo.conversation(body.conversation_id,user.id) if body.conversation_id else repo.new_conversation(user.id,body.text)
+        conversation = repo.conversation(body.conversation_id,user.id) if body.conversation_id else repo.new_conversation(user.id,body.text or "Image context")
         history = [{"role":row.role,"content":row.content} for row in repo.history(conversation.id,user.id)]
-        repo.add_message(conversation.id,user.id,"user",{"text":body.text})
+        repo.add_message(conversation.id,user.id,"user",{"text":body.text, "images":[image.model_dump() for image in body.images]})
         execution = repo.new_execution(conversation.id,user.id,policy.id)
-        return stream_response(request,execution,user,agent_factory(policy),initial={"request":body.text,"history":history})
+        return stream_response(request,execution,user,agent_factory(policy),initial={"request":body.text or "Help me with these images. Clarify any required purchase preferences.","history":history,"images":[image.model_dump() for image in body.images]})
 
     @app.post("/executions/{execution_id}/resume")
     async def resume(execution_id: str,body: Decision,request: Request,user=Depends(current)):

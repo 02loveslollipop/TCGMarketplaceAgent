@@ -41,7 +41,10 @@ def test_sse_cards_results_and_persistent_history(client,repo):
     assert "event: cards" in response.text and "event: result" in response.text
     assert '"product_subtotal": "1.25"' in response.text
     conversation = client.get("/conversations",headers=headers()).json()[0]
-    assert len(client.get(f"/conversations/{conversation['id']}",headers=headers()).json()) == 2
+    history=client.get(f"/conversations/{conversation['id']}",headers=headers()).json()
+    assert history[0]['content']['text']=='exact Test' and history[-1]['content']['type']=='result'
+    tools=[row['content']['data'] for row in history if row['content'].get('type')=='tool']
+    assert len(tools)==3 and all(tool['status']=='complete' for tool in tools)
     assert client.get(f"/conversations/{conversation['id']}",headers=headers("other")).status_code==404
 
 
