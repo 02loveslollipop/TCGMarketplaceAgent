@@ -20,6 +20,10 @@ The attribute-editing and hub patterns were also reviewed. A model is one policy
 
 Chat keeps model choice next to conversation selection and announces changes in a polite live region. The composer also names the model for the next request. Both selectors are locked during execution/history loading. A waiting execution keeps its original model; the UI explains that a newly selected model applies to the next new request. Switching to account security preserves the mounted chat, its draft and its selected model.
 
+## Sign-in and account recovery
+
+The sign-in layout follows the [Cloudscape hero-header sign-in example](https://cloudscape.design/patterns/general/hero-header/#examples-of-hero-headers): a high-contrast header and a centered authentication card. The verification chooser contains enrolled TOTP/passkey methods only. A secondary link beneath the card opens the dedicated `#account-recovery` page, which replaces the verification form and explains the reset before requesting a code. The page supports return navigation, browser back/forward, and heading focus after navigation. Recovery codes are cleared when leaving the page. Opening its URL without an in-memory password challenge first requires password verification. The server's mandatory replacement-factor enrollment behavior is unchanged.
+
 ## Verification
 
 Run `npm test` and `npm run build` from `frontend/`. Regression coverage includes exact model/request payloads, contextual save errors, cancel/discard behavior, focus restoration, validation, explicit enabled state, account payloads, model-change announcements, execution locking, security-page navigation, budget variants, SSE parsing, and existing authentication/onboarding flows.

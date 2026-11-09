@@ -1,4 +1,4 @@
-import {render,screen,waitFor} from '@testing-library/react';
+import {render,screen,waitFor,within} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,expect,it,vi} from 'vitest';
 import {Login} from '../Login';
@@ -9,7 +9,7 @@ import {startRegistration} from '@simplewebauthn/browser';
 
 vi.mock('@simplewebauthn/browser',()=>({startAuthentication:vi.fn(),startRegistration:vi.fn(),WebAuthnAbortService:{cancelCeremony:vi.fn()}}));
 const json=(value:unknown,status=200)=>new Response(JSON.stringify(value),{status,headers:{'Content-Type':'application/json'}});
-afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();});
+afterEach(()=>{vi.unstubAllGlobals();vi.restoreAllMocks();window.history.replaceState(null,'',window.location.pathname);});
 
 it('keeps login restricted through TOTP confirmation and clears codes when finished',async()=>{
   vi.stubGlobal('fetch',vi.fn(async(path:string)=>path.endsWith('/token')?json({enrollment_token:'limited'}):path.endsWith('/enrollment')?json({secret:'fixture-secret',uri:'otpauth://totp/Pokemon:user?secret=FIXTURESECRET&issuer=Pokemon'}):json({recovery_codes:['fixture-code']})));
@@ -91,9 +91,50 @@ it('switches verification methods and restricts recovery to new-factor enrollmen
   expect(screen.getByRole('button',{name:'Use passkey or security key'})).toBeInTheDocument();
   await user.click(screen.getByRole('radio',{name:'Authenticator app'}));
   expect(screen.getByLabelText('Authenticator code')).toHaveValue('');
-  await user.click(screen.getByRole('radio',{name:/Recover account/}));
-  await user.type(screen.getByLabelText('Recovery code'),'fixture-code');await user.click(screen.getByRole('button',{name:'Use recovery code'}));
+  expect(screen.getAllByRole('radio')).toHaveLength(2);
+  expect(screen.queryByRole('radio',{name:/Recover/})).not.toBeInTheDocument();
+  expect(screen.queryByLabelText('Recovery code')).not.toBeInTheDocument();
+  const link=screen.getByRole('link',{name:"Can't use your authenticator?"});
+  expect(within(screen.getByTestId('login-form')).queryByRole('link',{name:"Can't use your authenticator?"})).not.toBeInTheDocument();
+  expect(screen.getByTestId('login-form').compareDocumentPosition(link)&Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  await user.click(link);
+  expect(window.location.hash).toBe('#account-recovery');
+  expect(screen.getByRole('heading',{name:'Recover account'})).toContainElement(document.activeElement as HTMLElement);
+  expect(screen.queryByRole('heading',{name:'Verify your sign-in'})).not.toBeInTheDocument();
+  expect(screen.queryByRole('radio')).not.toBeInTheDocument();
+  await user.type(screen.getByLabelText('Recovery code'),'fixture-code{Enter}');
   expect(await screen.findByRole('heading',{name:'Secure your recovered account'})).toBeInTheDocument();
   expect(onLogin).not.toHaveBeenCalled();
   expect(vi.mocked(fetch).mock.calls.some(call=>String(call[0]).endsWith('/session'))).toBe(false);
+});
+
+
+it('returns to verification from the recovery page and clears abandoned recovery codes',async()=>{
+  vi.stubGlobal('fetch',vi.fn(async()=>json({challenge_token:'proof',methods:['totp','recovery']})));
+  const user=userEvent.setup(),onLogin=vi.fn();const {unmount}=render(<Login onLogin={onLogin}/>);
+  await user.type(screen.getByLabelText('Username'),'fixture');await user.type(screen.getByLabelText('Password'),'fixture-password');await user.click(screen.getByRole('button',{name:'Sign in'}));
+  await user.click(await screen.findByRole('link',{name:"Can't use your authenticator?"}));
+  await user.type(screen.getByLabelText('Recovery code'),'private-fixture');
+  await user.click(screen.getByRole('link',{name:'Back to verification'}));
+  expect(window.location.hash).toBe('');
+  expect(screen.getByRole('heading',{name:'Verify your sign-in'})).toBeInTheDocument();
+  expect(screen.queryByLabelText('Recovery code')).not.toBeInTheDocument();
+  await user.click(screen.getByRole('link',{name:"Can't use your authenticator?"}));
+  expect(screen.getByLabelText('Recovery code')).toHaveValue('');
+  expect(onLogin).not.toHaveBeenCalled();
+  unmount();window.history.replaceState(null,'',window.location.pathname);
+  vi.stubGlobal('fetch',vi.fn(async()=>json({challenge_token:'proof',methods:['totp']})));
+  render(<Login onLogin={vi.fn()}/>);
+  await user.type(screen.getByLabelText('Username'),'fixture');await user.type(screen.getByLabelText('Password'),'fixture-password');await user.click(screen.getByRole('button',{name:'Sign in'}));
+  await screen.findByLabelText('Authenticator code');
+  expect(screen.queryByRole('link',{name:"Can't use your authenticator?"})).not.toBeInTheDocument();
+});
+
+it('requires password verification when the recovery page is opened directly',async()=>{
+  window.history.replaceState(null,'','#account-recovery');
+  const onLogin=vi.fn();render(<Login onLogin={onLogin}/>);
+  expect(screen.getByRole('heading',{name:'Sign in to recover'})).toBeInTheDocument();
+  expect(screen.getByLabelText('Password')).toBeInTheDocument();
+  expect(screen.queryByLabelText('Recovery code')).not.toBeInTheDocument();
+  expect(onLogin).not.toHaveBeenCalled();
 });
