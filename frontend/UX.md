@@ -18,7 +18,7 @@ The attribute-editing and hub patterns were also reviewed. A model is one policy
 
 ## Chat redesign
 
-The full-page chat follows the official Cloudscape chat demo and GenAI patterns, with Conversations and Event log in the application navigation and a centered landing composer. See [CHAT_UX.md](CHAT_UX.md) for the documentation review, layout, interaction choices and verification scope. The model selector now lives beside the pinned composer; history is a searchable list, activity is a chronological view, and deck/budget artifacts open from previews into a separate review panel.
+The full-page chat follows the official Cloudscape chat demo and GenAI patterns, with searchable Conversations in the application navigation and a centered landing composer. See [CHAT_UX.md](CHAT_UX.md) for the documentation review, layout, interaction choices and verification scope. The model selector now lives beside the pinned composer; history is a searchable list, execution activity stays in expandable transcript sections, and deck/budget artifacts open from previews into a separate review panel.
 
 ## Model-selection feedback
 

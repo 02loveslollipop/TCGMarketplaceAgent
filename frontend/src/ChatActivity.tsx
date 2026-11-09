@@ -12,19 +12,6 @@ export function decisionText(decision:Decision,question?:Question|null){
     case 'cancel':return 'Cancelled this execution.';
   }
 }
-export function activityLabel(entry:ChatEntry){
-  switch(entry.type){
-    case 'user':return entry.data.text;
-    case 'progress':return entry.data.message;
-    case 'question':return entry.data.question;
-    case 'result':return 'Deck and budget available';
-    case 'cards':return 'Deck printings resolved';
-    case 'error':return entry.data.message;
-    case 'stopped':return entry.data.message;
-    case 'done':return entry.data.status==='complete'?'Execution completed':`Execution ${entry.data.status}`;
-    default:return 'Execution started';
-  }
-}
 export function ActivityTrace({entries,active,waiting=false}:{entries:ChatEntry[];active:boolean;waiting?:boolean}){
   const progress=entries.filter((entry):entry is ChatEntry&Extract<AgentEvent,{type:'progress'}>=>entry.type==='progress');
   if(!progress.length)return null;

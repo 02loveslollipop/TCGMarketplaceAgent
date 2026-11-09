@@ -1,5 +1,5 @@
 import {useEffect,useRef,useState,type CSSProperties} from 'react';
-import {Alert,Box,Button,CopyToClipboard,FormField,Header,Icon,List,LiveRegion,Modal,Popover,PromptInput,Select,SpaceBetween,StatusIndicator,Steps,Tabs,TextFilter} from '@cloudscape-design/components';
+import {Alert,Box,Button,CopyToClipboard,FormField,Header,Icon,List,LiveRegion,Modal,Popover,PromptInput,Select,SpaceBetween,StatusIndicator,TextFilter} from '@cloudscape-design/components';
 import type {PromptInputProps} from '@cloudscape-design/components';
 import {colorTextBodySecondary,colorTextLabelGenAi,colorTextBodyDefault,fontFamilyBase,fontSizeBodyM,lineHeightBodyM} from '@cloudscape-design/design-tokens';
 import {createPortal} from 'react-dom';
@@ -11,7 +11,7 @@ import type {AgentEvent,Conversation,Decision,Model,Question} from './contracts'
 import {DecisionPanel} from './DecisionPanel';
 import {ArtifactContent,ArtifactPreview,artifactTitle,type ChatArtifact} from './ChatArtifacts';
 import './chat.css';
-import {ActivityTrace,activityLabel,decisionText,type ChatEntry,type ChatEvent} from './ChatActivity';
+import {ActivityTrace,decisionText,type ChatEntry,type ChatEvent} from './ChatActivity';
 
 interface DailyUsage {daily_token_limit:number;total_tokens:number;remaining_tokens:number;unverified_usage:boolean;in_progress:boolean}
 interface HistoryRow {role:string;created_at?:string;content:{text?:string;type?:AgentEvent['type'];data?:unknown;execution_id?:string;decision?:Decision}}
@@ -28,7 +28,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
   const [question,setQuestion]=useState<Question|null>(null),[execution,setExecution]=useState(''),[conversation,setConversation]=useState<string|undefined>();
   const [conversations,setConversations]=useState<Conversation[]>([]),[conversationsLoading,setConversationsLoading]=useState(true),[historyError,setHistoryError]=useState('');
   const [usage,setUsage]=useState<DailyUsage|null>(null),[usageError,setUsageError]=useState('');
-  const [historyTab,setHistoryTab]=useState('conversations'),[filter,setFilter]=useState(''),[historyCount,setHistoryCount]=useState(15);
+  const [filter,setFilter]=useState(''),[historyCount,setHistoryCount]=useState(15);
   const [localArtifact,setLocalArtifact]=useState<ChatArtifact|null>(null),[jumpVisible,setJumpVisible]=useState(false),[announcement,setAnnouncement]=useState('');
   const controller=useRef<AbortController|null>(null),running=useRef(false),runId=useRef(0),alive=useRef(true),entryId=useRef(0);
   const log=useRef<HTMLDivElement>(null),prompt=useRef<PromptInputProps.Ref>(null),atBottom=useRef(true),previewTrigger=useRef<HTMLElement|null>(null);
@@ -86,12 +86,10 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
   const selectedModel=models.find(model=>model.id===modelId);
   const title=conversation?conversations.find(row=>row.id===conversation)?.title||'Current conversation':'New conversation';
   const filtered=conversations.filter(row=>row.title.toLocaleLowerCase().includes(filter.toLocaleLowerCase()));
-  const hiddenCards=new Set(events.filter((event,index)=>event.type==='cards'&&events.slice(index+1).find(item=>item.type==='result'||item.type==='user')?.type==='result').map(event=>event.id));
-  const milestones=events.filter(event=>['user','result','question','cards','error','stopped'].includes(event.type)&&!hiddenCards.has(event.id));
   const lastUser=events.map(event=>event.type).lastIndexOf('user');
   const latestEntries=events.slice(Math.max(0,lastUser));
   const currentActivity=[...latestEntries].reverse().find(event=>event.type==='progress');
-  const currentLabel=currentActivity?activityLabel(currentActivity):'Generating a response';
+  const currentLabel=currentActivity?.data.message||'Generating a response';
   const rootStyle={'--chat-muted':colorTextBodySecondary,'--chat-ai-label':colorTextLabelGenAi,'--chat-text':colorTextBodyDefault,'--chat-font':fontFamilyBase,'--chat-font-size':fontSizeBodyM,'--chat-line-height':lineHeightBodyM} as CSSProperties;
   const history=<div className="chat-nav-section">
     <Header variant="h2" counter={`(${conversations.length})`} actions={<Button data-testid="new-conversation-button" variant="icon" iconName="add-plus" ariaLabel="New conversation" disabled={locked} onClick={newConversation}/>}>Conversations</Header>
@@ -104,10 +102,9 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
       </div>}
     </SpaceBetween>
   </div>;
-  const timeline=<div className="chat-nav-section">{milestones.length?<Steps ariaLabel="Conversation timeline" renderStep={step=>({header:step.header,icon:step.statusIconAriaLabel==='Your request'?<Icon name="user-profile" ariaLabel="Your request"/>:undefined})} steps={milestones.map(event=>({status:event.type==='error'?'error':event.type==='stopped'?'stopped':event.type==='question'&&event.data===question?'pending':event.type==='result'||event.type==='cards'?'success':'info',statusIconAriaLabel:event.type==='user'?'Your request':undefined,header:<Button variant="inline-link" onClick={()=>{const node=document.getElementById(event.id);node?.scrollIntoView({block:'nearest'});node?.focus({preventScroll:true});onConversationSelected?.();}}>{activityLabel(event)}</Button>}))}/>:<Box color="text-body-secondary">Requests, decisions, and results will appear here as the conversation progresses.</Box>}</div>;
   const navigation=<div className="chat-navigation" data-testid="chat-navigation">
     <Box variant="h2" padding="l">Deck agent</Box>
-    <div className="chat-navigation-tabs"><Tabs ariaLabel="Chat navigation" fitHeight disableContentPaddings activeTabId={historyTab} onChange={({detail})=>setHistoryTab(detail.activeTabId)} tabs={[{id:'conversations',label:'Conversations',content:history},{id:'activity',label:'Event log',content:timeline}]}/></div>
+    <div className="chat-navigation-content">{history}</div>
   </div>;
   const modelControl=<div className="chat-model-control"><Select ariaLabel="Model" data-testid="model-select" disabled={locked} statusType={modelsLoading?'loading':'finished'} loadingText="Loading models" expandToViewport selectedOption={selectedModel?{label:selectedModel.label,value:modelId}:null} options={models.map(model=>({label:model.label,value:model.id,description:model.provider==='openai'?'OpenAI':'Mistral'}))} onChange={({detail})=>{const next=models.find(model=>model.id===detail.selectedOption.value);setModelId(detail.selectedOption.value||'');setModelNotice(`Model changed to ${next?.label}. Your next request will use this model.`);}} placeholder="No enabled models"/></div>;
   const composer=<div className="chat-composer-content">
