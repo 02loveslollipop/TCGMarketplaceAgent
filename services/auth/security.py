@@ -12,7 +12,7 @@ import pyotp
 from sqlalchemy import select, delete, update
 
 from shared.contracts import utcnow
-from shared.db import Challenge, User, EnrollmentState, RecoveryCode, WebAuthnCredential, WebAuthnChallenge
+from shared.db import Challenge, User, EnrollmentState, RecoveryCode, WebAuthnCredential, WebAuthnChallenge, AuditLog
 
 
 class AuthenticationError(Exception):
@@ -203,6 +203,22 @@ class Security:
             else:failure=AuthenticationError("Invalid or already used recovery code.")
         if failure:raise failure
         return result
+
+    def change_role(self,actor,user_id,role):
+        with self.repo.transaction() as session:
+            rows=list(session.scalars(select(User).where((User.role=="admin")|(User.id==user_id)|(User.id==actor.id)).order_by(User.id).with_for_update()))
+            caller=next((row for row in rows if row.id==actor.id),None)
+            target=next((row for row in rows if row.id==user_id),None)
+            if not caller or not caller.active or caller.role!="admin" or caller.token_version!=actor.token_version:
+                raise AuthenticationError("Administrator session is unavailable.")
+            if not target:raise ValueError("Account not found.")
+            if target.role=="admin" and role!="admin" and target.active and sum(row.active and row.role=="admin" for row in rows)<=1:
+                raise ValueError("The last active administrator cannot be demoted.")
+            changed=target.role!=role
+            if changed:
+                old=target.role;target.role=role;target.token_version+=1
+                session.add(AuditLog(action="account_role_changed",details={"actor_id":actor.id,"account_id":target.id,"from_role":old,"to_role":role}))
+            return {"id":target.id,"username":target.username,"role":target.role,"active":target.active,"sign_in_again":changed and actor.id==target.id}
 
     def enroll_totp(self, user: User) -> dict:
         if user.totp_secret:

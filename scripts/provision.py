@@ -17,9 +17,10 @@ from shared.db import Base, SCHEMA
 SERVICE_TABLES = {
     "auth": {"users": "SELECT, INSERT, UPDATE", "challenges": "SELECT, INSERT, UPDATE",
              "webauthn_credentials": "SELECT, INSERT, UPDATE, DELETE", "webauthn_challenges": "SELECT, INSERT, UPDATE",
-             "enrollment_states": "SELECT, INSERT, UPDATE", "recovery_codes": "SELECT, INSERT, UPDATE, DELETE"},
-    "admin": {"models": "SELECT, INSERT, UPDATE"},
+             "logs": "INSERT", "enrollment_states": "SELECT, INSERT, UPDATE", "recovery_codes": "SELECT, INSERT, UPDATE, DELETE"},
+    "admin": {"models": "SELECT, INSERT, UPDATE", "role_policies": "SELECT, INSERT, UPDATE", "logs": "INSERT"},
     "orchestrator": {
+        "role_policies": "SELECT", "daily_token_usage": "SELECT, INSERT, UPDATE",
         "models": "SELECT", "conversations": "SELECT, INSERT, UPDATE",
         "messages": "SELECT, INSERT", "executions": "SELECT, INSERT, UPDATE",
         "events": "SELECT, INSERT", "logs": "SELECT, INSERT", "graph_checkpoints": "SELECT, INSERT, UPDATE",

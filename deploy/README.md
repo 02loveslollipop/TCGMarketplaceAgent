@@ -127,3 +127,40 @@ This repository does not claim public deployment.
 
 Stop with `docker compose down`. This removes local containers/networks without
 altering the external database or its application records.
+
+### Role policies and daily token accounting
+
+Before updating running services with these features, run the existing app-scoped
+`scripts.provision` command. It adds `pokemon_tcg_poc.role_policies` and
+`pokemon_tcg_poc.daily_token_usage` and grants the service roles only their needed
+operations. Auth and admin also receive INSERT access to the app audit log for
+role changes. This source update has been tested against isolated local PostgreSQL;
+it does not itself migrate the shared database or deploy services.
+
+Default daily allowances are 50,000 tokens per User account and 200,000 per
+Administrator account. Administrators can edit either quota and its allowed model
+list under Role access and quotas. A null model list inherits globally enabled
+models; an empty list allows none. A quota of zero blocks new model calls. Role
+changes do not reset a user's usage. Only globally enabled and role-allowed models
+are listed or accepted by the orchestration API.
+
+Input and output tokens are counted from provider response metadata around every
+LangChain call, including tool reasoning and structured parsing failures. Reasoning
+tokens already included in reported output are not added twice. A call is charged
+to its start date in Asia/Tokyo, and allowances reset at midnight Japan time.
+Responses already admitted may finish beyond the remaining quota. Concurrent
+model calls for the same account are rejected so parallel requests cannot spend
+the same remaining allowance. Stopping an agent stops subsequent work while its
+admitted provider call finishes for usage accounting. Explicit provider rejections
+(e.g. HTTP 429) release the admission without charging tokens. If usage cannot be
+verified, or the process dies during a call, further calls for that day are blocked
+rather than silently treating unknown usage as zero. Daily usage is visible in chat.
+
+This is an LLM token budget, not a monetary limit on supplier tools or a proof
+against prompt injection. Authorization and usage checks run on the server, outside
+model output. Existing read-only tool restrictions and validated outputs still apply.
+
+Run the usual Python/frontend checks for a local review. The additional concurrency
+test is enabled with TEST_ROLE_POSTGRES_URL pointing to an isolated local PostgreSQL
+database named `tcg_dashboard_test` on `127.0.0.1`; it recreates only this app's tables
+in that disposable database. Never point it at the shared database.

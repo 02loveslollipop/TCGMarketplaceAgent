@@ -1,8 +1,8 @@
 """Only app-owned schema objects appear in metadata or queries."""
-from datetime import datetime
+from datetime import date, datetime
 from uuid import uuid4
 
-from sqlalchemy import JSON, BigInteger, Boolean, DateTime, ForeignKey, Integer, MetaData, String, Text, UniqueConstraint, create_engine
+from sqlalchemy import JSON, BigInteger, Boolean, Date, DateTime, ForeignKey, Integer, MetaData, String, Text, UniqueConstraint, create_engine
 from sqlalchemy.orm import DeclarativeBase, Mapped, mapped_column, sessionmaker
 
 from shared.contracts import utcnow
@@ -155,3 +155,22 @@ def database(url: str):
     options = {"schema_translate_map": {SCHEMA: None}} if url.startswith("sqlite") else {}
     engine = create_engine(url, execution_options=options, pool_pre_ping=True)
     return engine, sessionmaker(engine, expire_on_commit=False)
+
+
+class RolePolicy(Base):
+    __tablename__ = "role_policies"
+    role: Mapped[str] = mapped_column(String(16), primary_key=True)
+    daily_token_limit: Mapped[int] = mapped_column(BigInteger)
+    allowed_model_ids: Mapped[list | None] = mapped_column(JSON, nullable=True)
+
+
+class DailyTokenUsage(Base):
+    __tablename__ = "daily_token_usage"
+    user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
+    usage_date: Mapped[date] = mapped_column(Date, primary_key=True)
+    input_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    output_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    total_tokens: Mapped[int] = mapped_column(BigInteger, default=0)
+    active_call_id: Mapped[str | None] = mapped_column(String(36))
+    active_until: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    unverified_usage: Mapped[bool] = mapped_column(Boolean, default=False)

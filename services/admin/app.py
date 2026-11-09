@@ -3,7 +3,13 @@ from fastapi import Depends, HTTPException
 from pydantic import BaseModel, Field
 from shared.api import application, require_admin
 from shared.contracts import utcnow
-from services.auth.app import AccountInput
+from services.auth.app import AccountInput, RoleInput
+from shared.role_policy import RolePolicies, PolicyError
+
+
+class RolePolicyInput(BaseModel):
+    daily_token_limit: int = Field(ge=0,le=1_000_000_000,strict=True)
+    allowed_model_ids: list[str] | None = Field(default=None,max_length=100)
 
 
 class ModelInput(BaseModel):
@@ -29,7 +35,9 @@ def create_app(repo, current, auth_url="http://auth:8000", orchestrator_url="htt
                 async with httpx.AsyncClient(timeout=30) as http:
                     response = await http.request(method,url,json=body,headers={"Authorization":f"Bearer {user.token}"})
             if response.status_code >= 400:
-                raise HTTPException(response.status_code, "Service rejected the administrative operation.")
+                try:message=response.json().get("error",{}).get("message")
+                except ValueError:message=None
+                raise HTTPException(response.status_code,message or "Service rejected the administrative operation.")
             return response.json()
         except httpx.RequestError:
             raise HTTPException(503,"Required service is unavailable.") from None
@@ -43,6 +51,24 @@ def create_app(repo, current, auth_url="http://auth:8000", orchestrator_url="htt
     async def create_account(body: AccountInput,user=Depends(current)):
         require_admin(user)
         return await proxy("POST",f"{auth_url}/accounts",user,body.model_dump())
+
+    @app.put("/accounts/{user_id}/role")
+    async def change_role(user_id: str,body: RoleInput,user=Depends(current)):
+        require_admin(user)
+        return await proxy("PUT",f"{auth_url}/accounts/{user_id}/role",user,body.model_dump())
+
+    @app.get("/role-policies")
+    def role_policies(user=Depends(current)):
+        require_admin(user)
+        return RolePolicies(repo).policies()
+
+    @app.put("/role-policies/{role}")
+    def save_role_policy(role: str,body: RolePolicyInput,user=Depends(current)):
+        require_admin(user)
+        if body.allowed_model_ids is not None and any(not repo.model(model_id) for model_id in body.allowed_model_ids):
+            raise HTTPException(422,"Choose models that exist in the model registry.")
+        try:return RolePolicies(repo).save(role,body.daily_token_limit,body.allowed_model_ids,user.id)
+        except PolicyError as error:raise HTTPException(error.status,str(error)) from None
 
     @app.get("/models")
     def models(user=Depends(current)):

@@ -15,6 +15,10 @@ class AccountInput(BaseModel):
     role: str = Field(default="user", pattern=r"^(user|admin)$")
 
 
+class RoleInput(BaseModel):
+    role: str = Field(pattern=r"^(user|admin)$")
+
+
 class TotpCode(BaseModel):
     code: str = Field(min_length=6, max_length=6, pattern=r"^[0-9]{6}$")
 
@@ -149,6 +153,12 @@ def create_app(repo, security, webauthn=None):
             return {"id":account.id, "username":account.username, "role":account.role}
         except IntegrityError:
             raise HTTPException(409, "Username already exists.") from None
+
+    @app.put("/accounts/{user_id}/role")
+    def change_role(user_id: str,body: RoleInput,user=Depends(current)):
+        require_admin(Principal(user.id,user.username,user.role))
+        try:return security.change_role(user,user_id,body.role)
+        except ValueError as error:raise HTTPException(409,str(error)) from None
 
     @app.post("/totp/enrollment")
     def enrollment(user=Depends(current)):

@@ -7,7 +7,8 @@ from pydantic import BaseModel, Field
 from shared.api import application, require_admin
 from shared.contracts import ChatInput, Decision
 from services.admin.app import serialize_model
-from services.orchestrator.models import ModelUnavailable, verify_api_id
+from services.orchestrator.models import ModelUnavailable, verify_api_id, invocation_context
+from shared.role_policy import RolePolicies, PolicyError
 
 
 class VerificationInput(BaseModel):
@@ -18,7 +19,9 @@ class VerificationInput(BaseModel):
 def create_app(repo, current, agent_factory, verifier=verify_api_id):
     app = application("Pokemon agent orchestration")
 
-    async def allowed(model_id):
+    async def allowed(model_id,user):
+        try:RolePolicies(repo).check_available(user.id,user.role,model_id)
+        except PolicyError as error:raise HTTPException(error.status,str(error)) from None
         policy = repo.model(model_id)
         if not policy or not policy.enabled:
             raise HTTPException(403,"Model is disabled or unavailable.")
@@ -31,7 +34,11 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.get("/models")
     def models(user=Depends(current)):
-        return [serialize_model(policy) for policy in repo.models(enabled_only=True)]
+        return [serialize_model(policy) for policy in repo.models(enabled_only=True) if RolePolicies(repo).model_allowed(user.role,policy.id)]
+
+    @app.get("/usage")
+    def usage(user=Depends(current)):
+        return RolePolicies(repo).usage(user.id,user.role)
 
     @app.post("/internal/models/verify")
     async def verify_model(body: VerificationInput,user=Depends(current)):
@@ -60,6 +67,7 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
             yield f"event: execution\ndata: {json.dumps({'id':execution.id,'conversation_id':execution.conversation_id})}\n\n"
             iterator = agent.stream(execution.id,user.id,**kwargs).__aiter__()
             pending = None
+            context_token=invocation_context.set((user,current))
             try:
                 while True:
                     pending = asyncio.create_task(anext(iterator))
@@ -83,18 +91,20 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
                 repo.checkpoint(execution.id,user.id,{"error_type":type(error).__name__},"failed")
                 repo.event(execution.id,user.id,"error",{"error_type":type(error).__name__})
                 message = "Model provider is rate-limited; try again later." if getattr(error,"status_code",None)==429 else f"Execution failed ({type(error).__name__}). Check model/source access and retry."
+                if isinstance(error,(PolicyError,ModelUnavailable)):message=str(error)
                 yield f"event: error\ndata: {json.dumps({'message':message})}\n\n"
             finally:
                 if pending and not pending.done():
                     pending.cancel()
                     with suppress(asyncio.CancelledError):
                         await pending
-                await iterator.aclose()
+                try:await iterator.aclose()
+                finally:invocation_context.reset(context_token)
         return StreamingResponse(events(),media_type="text/event-stream",headers={"Cache-Control":"no-cache, no-store","X-Accel-Buffering":"no"})
 
     @app.post("/executions")
     async def start(body: ChatInput,request: Request,user=Depends(current)):
-        policy = await allowed(body.model_id)
+        policy = await allowed(body.model_id,user)
         conversation = repo.conversation(body.conversation_id,user.id) if body.conversation_id else repo.new_conversation(user.id,body.text)
         history = [{"role":row.role,"content":row.content} for row in repo.history(conversation.id,user.id)]
         repo.add_message(conversation.id,user.id,"user",{"text":body.text})
@@ -109,7 +119,7 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
         actions = execution.checkpoint.get("actions",[])
         if body.action not in actions or (body.action in {"keep_missing","substitute"} and not body.approved) or (body.action in {"clarify","substitute"} and not body.text.strip()):
             raise HTTPException(422,"Answer the current question and explicitly approve substitutions or missing cards.")
-        policy = await allowed(execution.model_id)
+        policy = await allowed(execution.model_id,user)
         if not repo.claim_execution(execution_id,user.id):
             raise HTTPException(409,"Execution is already being resumed.")
         repo.add_message(execution.conversation_id,user.id,"user",{"decision":body.model_dump()})
