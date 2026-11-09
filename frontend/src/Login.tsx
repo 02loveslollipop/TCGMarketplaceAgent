@@ -1,12 +1,13 @@
 import {useEffect,useLayoutEffect,useRef,useState} from 'react';
 import {Alert,Box,Button,Container,ContentLayout,Form,FormField,Header,Icon,Input,Link,RadioGroup,SpaceBetween} from '@cloudscape-design/components';
-import {colorTextHomeHeaderDefault,colorBackgroundLayoutMain,colorTextBodyDefault,fontFamilyBase,fontSizeBodyM,lineHeightBodyM} from '@cloudscape-design/design-tokens';
+import {colorBackgroundHomeHeader,colorTextHomeHeaderDefault,colorBackgroundLayoutMain,colorTextBodyDefault,fontFamilyBase,fontSizeBodyM,lineHeightBodyM} from '@cloudscape-design/design-tokens';
 import {api,apiUrl} from './client';
 import type {Session} from './contracts';
 import {WebAuthnLogin} from './WebAuthn';
 import {Onboarding} from './Onboarding';
 import {RecoveryLogin} from './Recovery';
 import './login.css';
+import {ThemePicker} from './ThemePicker';
 
 type LoginResult={access_token?:string;challenge_token?:string;methods?:string[];enrollment_token?:string;recovery_reset?:boolean};
 const recoveryHash='#account-recovery';
@@ -70,7 +71,7 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
         {[[100,160],[360,240],[640,130],[810,350],[620,540],[760,760],[430,700],[170,790],[100,530],[360,460]].map(([cx,cy])=><circle key={`${cx}-${cy}`} cx={cx} cy={cy} r="15"/>)}
       </g>
     </svg>
-    <ContentLayout defaultPadding headerVariant="high-contrast" maxContentWidth={500} headerBackgroundStyle="transparent" header={
+    <ContentLayout defaultPadding headerVariant="high-contrast" maxContentWidth={500} headerBackgroundStyle={colorBackgroundHomeHeader} header={
       <div className="login-hero" style={{color:colorTextHomeHeaderDefault}}>
         <Box variant="h1" fontSize="display-l" fontWeight="bold" padding="n" textAlign="center">Pokémon TCG</Box>
         <Box variant="p" fontSize="heading-m" textAlign="center">Build your deck through conversation.</Box>
@@ -104,6 +105,7 @@ export function Login({onLogin,notice}:{onLogin:(token:string,user:Session)=>voi
           {challenge&&methods.includes('recovery')&&!enrollment&&<Box textAlign="center"><Link color="inverted" data-testid="account-recovery-link" href={recoveryHash} onFollow={event=>{event.preventDefault();if(!busy)navigateRecovery(true);}}>Can't use your authenticator?</Link></Box>}
         </>}
         {!enrollment&&(challenge||recoveryRoute)&&<Box textAlign="center"><Link color="inverted" data-testid="login-back-link" href="#" onFollow={event=>{event.preventDefault();if(!busy){if(recoveryPage)navigateRecovery(false);else restart();}}}><Icon name="arrow-left"/> {recoveryPage?'Back to verification':'Back to sign in'}</Link></Box>}
+        <div className="login-theme-picker"><ThemePicker/></div>
       </SpaceBetween></div>
     </ContentLayout>
   </main>;

@@ -1,10 +1,11 @@
 import {useEffect,useRef,useState} from 'react';
 import {Alert,Box,Button,Checkbox,ColumnLayout,Container,Flashbar,Form,FormField,Header,Input,KeyValuePairs,Modal,Pagination,Select,SpaceBetween,StatusIndicator,Table,TextFilter} from '@cloudscape-design/components';
 import {api} from './client';
+import {RolePolicies} from './RolePolicies';
 import type {Model} from './contracts';
 
 interface Account {id:string;username:string;role:string;active:boolean}
-export type AdminSection='overview'|'accounts'|'models';
+export type AdminSection='overview'|'accounts'|'models'|'roles';
 const suggestions=[{label:'GPT 6 luna',value:'gpt-6-luna',provider:'openai'}, {label:'GPT 6.1 terra',value:'gpt-6.1-terra',provider:'openai'}, {label:'Mistral Medium',value:'mistral-medium-latest',provider:'mistral'}];
 const newModel=():Model=>({id:'',label:'',provider:'openai',api_id:'',enabled:false});
 const providerName=(provider:string)=>provider==='openai'?'OpenAI':'Mistral';
@@ -50,12 +51,15 @@ function AccountEditor({onClose,onSave}:{onClose:()=>void;onSave:(account:{usern
   </Modal>;
 }
 
-export function Admin({token,section='models',onNavigate}:{token:string;section?:AdminSection;onNavigate?:(section:AdminSection)=>void}) {
+export function Admin({token,section='models',onNavigate,onSessionChange}:{token:string;section?:AdminSection;onNavigate?:(section:AdminSection)=>void;onSessionChange?:()=>void}) {
   const [accounts,setAccounts]=useState<Account[]>([]),[models,setModels]=useState<Model[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true);
   const [editing,setEditing]=useState<Model|null>(null),[creatingModel,setCreatingModel]=useState(false),[creatingAccount,setCreatingAccount]=useState(false);
+  const [rolesVisited,setRolesVisited]=useState(section==='roles');
+  useEffect(()=>{if(section==='roles')setRolesVisited(true);},[section]);
+  const [roleAccount,setRoleAccount]=useState<Account|null>(null),[newRole,setNewRole]=useState('user'),[roleBusy,setRoleBusy]=useState(false),[roleError,setRoleError]=useState('');
   const [filter,setFilter]=useState(''),[page,setPage]=useState(1);
   const editorTrigger=useRef<HTMLElement|null>(null);
-  useEffect(()=>{if(!editing&&!creatingAccount)editorTrigger.current?.focus();},[editing,creatingAccount]);
+  useEffect(()=>{if(!editing&&!creatingAccount&&!roleAccount)editorTrigger.current?.focus();},[editing,creatingAccount,roleAccount]);
   async function refresh(){const [accounts,models]=await Promise.all([api<Account[]>('/api/admin/accounts',token),api<Model[]>('/api/admin/models',token)]);setAccounts(accounts);setModels(models);}
   useEffect(()=>{void refresh().catch(error=>setError(error.message)).finally(()=>setLoading(false));},[token]);
   useEffect(()=>{setFilter('');setPage(1);},[section]);
@@ -69,6 +73,7 @@ export function Admin({token,section='models',onNavigate}:{token:string;section?
   const tableFilter=<TextFilter filteringText={filter} filteringPlaceholder={section==='accounts'?'Find accounts':'Find models'} filteringAriaLabel={section==='accounts'?'Find accounts':'Find models'} onChange={({detail})=>{setFilter(detail.filteringText);setPage(1);}} countText={`${rows.length} ${rows.length===1?'match':'matches'}`}/>;
   const pagination=<Pagination currentPageIndex={currentPage} pagesCount={Math.max(1,Math.ceil(rows.length/10))} onChange={({detail})=>setPage(detail.currentPageIndex)} ariaLabels={{nextPageLabel:'Next page',previousPageLabel:'Previous page',pageLabel:page=>`Page ${page}`}}/>;
   return <SpaceBetween size="l">
+    <div hidden={section==='roles'}><SpaceBetween size="l">
     <Header variant="h1" description={section==='overview'?'Manage access and the models available to the deck agent.':section==='accounts'?'Manage who can use this private workspace.':'Control which models appear in chat and the provider identifiers they use.'} actions={section!=='overview'&&<Button variant="primary" onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setNotice('');if(section==='accounts')setCreatingAccount(true);else{setCreatingModel(true);setEditing(newModel());}}}>{section==='accounts'?'Create account':'Create model policy'}</Button>}>{section==='overview'?'Administration':section==='accounts'?'Accounts':'Model policies'}</Header>
     {error&&<Alert type="error" dismissible onDismiss={()=>setError('')}>{error}</Alert>}
     <Flashbar items={notice?[{id:'admin-success',type:'success',content:notice,dismissible:true,dismissLabel:'Dismiss notification',onDismiss:()=>setNotice('')}]:[]}/>
@@ -78,9 +83,11 @@ export function Admin({token,section='models',onNavigate}:{token:string;section?
         <KeyValuePairs items={[{label:'Model policies',value:loading?'Loading…':`${models.length}`},{label:'Enabled in chat',value:loading?'Loading…':`${models.filter(item=>item.enabled).length}`}]} />
         <KeyValuePairs items={[{label:'Access',value:'Private workspace'},{label:'Model verification',value:'Required when enabling'}]} />
       </ColumnLayout></Container>
+      <Container header={<Header variant="h2" actions={<Button onClick={()=>onNavigate?.('roles')}>Manage role access</Button>}>Role access and quotas</Header>}><Box>Manage User and Administrator model access and daily token quotas.</Box></Container>
       <ColumnLayout columns={2}><Container header={<Header variant="h2" actions={<Button onClick={()=>onNavigate?.('accounts')}>View accounts</Button>}>Accounts</Header>}><Box>Create user or administrator accounts. New account holders enroll an authenticator at sign-in.</Box></Container><Container header={<Header variant="h2" actions={<Button onClick={()=>onNavigate?.('models')}>View model policies</Button>}>Models</Header>}><Box>Review availability, edit model settings, or add a provider model.</Box></Container></ColumnLayout>
     </>:section==='accounts'?<Table data-testid="admin-accounts-table" loading={loading} loadingText="Loading accounts" trackBy="id" header={<Header variant="h2" counter={`(${accounts.length})`}>Accounts</Header>} filter={tableFilter} pagination={pagination} items={filteredAccounts.slice((currentPage-1)*10,currentPage*10)} empty={empty} columnDefinitions={[
-      {id:'username',header:'Username',cell:row=>row.username},{id:'role',header:'Role',cell:row=>row.role==='admin'?'Administrator':'User'},{id:'active',header:'State',cell:row=><StatusIndicator type={row.active?'success':'stopped'}>{row.active?'Active':'Disabled'}</StatusIndicator>}
+      {id:'username',header:'Username',cell:row=>row.username},{id:'role',header:'Role',cell:row=>row.role==='admin'?'Administrator':'User'},{id:'active',header:'State',cell:row=><StatusIndicator type={row.active?'success':'stopped'}>{row.active?'Active':'Disabled'}</StatusIndicator>},
+      {id:'actions',header:'Actions',cell:row=><Button variant="inline-link" ariaLabel={`Change role for ${row.username}`} onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setRoleAccount(row);setNewRole(row.role);setRoleError('');}}>Change role</Button>}
     ]}/>:<>
       <Table data-testid="admin-models-table" stickyColumns={{first:1,last:1}} loading={loading} loadingText="Loading model policies" trackBy="id" header={<Header variant="h2" counter={`(${models.length})`} description="Choose Edit on a row to update that specific policy.">Allowed models</Header>} filter={tableFilter} pagination={pagination} items={filteredModels.slice((currentPage-1)*10,currentPage*10)} empty={empty} columnDefinitions={[
         {id:'label',header:'Model',cell:row=><SpaceBetween size="xxs"><Box fontWeight="bold">{row.label}</Box><Box color="text-body-secondary" fontSize="body-s">{row.id}</Box></SpaceBetween>},
@@ -91,6 +98,9 @@ export function Admin({token,section='models',onNavigate}:{token:string;section?
       ]}/>
       <Box color="text-body-secondary">Enabling a policy verifies the API identifier with its provider. Invocation failures are reported in chat.</Box>
     </>}
+    </SpaceBetween></div>
+    <div hidden={section!=='roles'}>{rolesVisited&&<RolePolicies token={token}/>}</div>
+    {roleAccount&&<Modal visible header={`Change role for ${roleAccount.username}`} closeAriaLabel="Close role editor" onDismiss={()=>{if(!roleBusy)setRoleAccount(null);}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" disabled={roleBusy} onClick={()=>setRoleAccount(null)}>Cancel</Button><Button variant="primary" loading={roleBusy} disabled={newRole===roleAccount.role} onClick={()=>{if(roleBusy)return;setRoleBusy(true);setRoleError('');void api<Account&{sign_in_again:boolean}>(`/api/admin/accounts/${roleAccount.id}/role`,token,{method:'PUT',body:JSON.stringify({role:newRole})}).then(async result=>{setRoleAccount(null);if(result.sign_in_again){onSessionChange?.();return;}setNotice(`${result.username} role changed to ${result.role==='admin'?'Administrator':'User'}. Existing sessions revoked.`);await reload();}).catch(error=>setRoleError(error.message)).finally(()=>setRoleBusy(false));}}>Save role</Button></SpaceBetween></Box>}><SpaceBetween size="l"><FormField label="Account role"><Select selectedOption={{value:newRole,label:newRole==='admin'?'Administrator':'User'}} options={[{value:'user',label:'User'},{value:'admin',label:'Administrator'}]} onChange={({detail})=>setNewRole(detail.selectedOption.value!)} disabled={roleBusy}/></FormField><Alert type="info">Changing a role revokes the account's existing sessions. The last active administrator cannot be demoted.</Alert>{roleError&&<Alert type="error">{roleError}</Alert>}</SpaceBetween></Modal>}
     {editing&&<ModelEditor key={`${creatingModel}-${editing.id}`} model={editing} existingIds={models.map(model=>model.id)} creating={creatingModel} onClose={()=>setEditing(null)} onSave={async model=>{await api(`/api/admin/models/${encodeURIComponent(model.id)}`,token,{method:'PUT',body:JSON.stringify({label:model.label,provider:model.provider,api_id:model.api_id,enabled:model.enabled})});setNotice(`${model.label} model policy saved. ${model.enabled?'Enabled in chat.':'Disabled in chat.'}`);await reload();}}/>}
     {creatingAccount&&<AccountEditor onClose={()=>setCreatingAccount(false)} onSave={async account=>{await api('/api/admin/accounts',token,{method:'POST',body:JSON.stringify(account)});setNotice(`Account ${account.username} created.`);await reload();}}/>}
   </SpaceBetween>;
