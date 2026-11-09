@@ -1,8 +1,9 @@
-import {useEffect,useRef,useState} from 'react';
+import {useEffect,useId,useRef,useState} from 'react';
 import {Alert,Box,Button,Container,Header,ExpandableSection,FormField,Input,Modal,SpaceBetween,Table} from '@cloudscape-design/components';
 import {startAuthentication,startRegistration,WebAuthnAbortService} from '@simplewebauthn/browser';
 import type {PublicKeyCredentialCreationOptionsJSON,PublicKeyCredentialRequestOptionsJSON} from '@simplewebauthn/browser';
 import {api} from './client';
+import type {ButtonProps,InputProps} from '@cloudscape-design/components';
 
 type AccessToken={access_token:string;token_type:string;expires_in:number};
 interface Credential {id:string;name:string;created_at:string;device_type:string;backed_up:boolean}
@@ -54,7 +55,13 @@ export function WebAuthnLogin({challengeToken,disabled,onAuthenticated,onBusy}:{
 export function WebAuthnSettings({token,onChange,embedded=false}:{token:string;onChange:()=>void;embedded?:boolean}) {
   const [credentials,setCredentials]=useState<Credential[]>([]),[name,setName]=useState(''),[busy,setBusy]=useState(false),[error,setError]=useState('');
   const [creating,setCreating]=useState(false),[discard,setDiscard]=useState(false);
+  const registrationForm=useId();
+  const nameInput=useRef<InputProps.Ref>(null),keepSetup=useRef<ButtonProps.Ref>(null);
+  useEffect(()=>{if(creating){if(discard)keepSetup.current?.focus();else nameInput.current?.focus();}},[creating,discard]);
   const createTrigger=useRef<HTMLElement|null>(null);
+  function openCreate(){createTrigger.current=document.activeElement as HTMLElement;setName('');setDiscard(false);setCreating(true);setError('');}
+  function closeCreate(){if(busy)return;if(name.trim())setDiscard(true);else discardCreate();}
+  function discardCreate(){setName('');setCreating(false);setDiscard(false);setError('');}
   useEffect(()=>{if(!creating)createTrigger.current?.focus();},[creating]);
   const [removing,setRemoving]=useState<Credential|null>(null),[removalError,setRemovalError]=useState('');
   const removeTrigger=useRef<HTMLElement|null>(null);
@@ -73,7 +80,7 @@ export function WebAuthnSettings({token,onChange,embedded=false}:{token:string;o
       const credential=await startRegistration({optionsJSON:request.options});
       if(cancelled.current)throw new DOMException('Cancelled','AbortError');
       await api('/api/auth/webauthn/registration/verify',token,{method:'POST',body:JSON.stringify({challenge_id:request.challenge_id,credential})});
-      ceremony.current=null;onChange();
+      ceremony.current=null;setCreating(false);setName('');onChange();
     }catch(error){setError(ceremonyError(error));if(ceremony.current){try{await api(`/api/auth/webauthn/challenges/${ceremony.current}/cancel`,token,{method:'POST',body:'{}'});}catch{setError('Registration could not be completed or cancelled. Sign in again to retry.');}ceremony.current=null;}}
     finally{setBusy(false);}
   }
@@ -83,18 +90,27 @@ export function WebAuthnSettings({token,onChange,embedded=false}:{token:string;o
   }
   const content=<SpaceBetween size="m">
     <Box>Use your browser’s chooser to add a password-manager passkey or a physical security key. You will still enter your password before using it to sign in. Adding or removing an authenticator requires signing in again.</Box>
-    {error&&<Alert type="error">{error}</Alert>}
+    {!creating&&error&&<Alert type="error">{error}</Alert>}
     <Table data-testid="webauthn-credentials-table" items={credentials} empty={<Box>No passkeys or security keys enrolled.</Box>} columnDefinitions={[
       {id:'name',header:'Authenticator',cell:credential=>credential.name},
       {id:'created',header:'Enrolled',cell:credential=>new Date(credential.created_at).toLocaleString()},
       {id:'remove',header:'Manage',cell:credential=><Button data-testid="webauthn-remove-button" variant="inline-link" disabled={busy} onClick={()=>{removeTrigger.current=document.activeElement as HTMLElement;setRemovalError('');setRemoving(credential);}}>Remove {credential.name}</Button>}
     ]}/>
-    {(creating||!embedded)&&<SpaceBetween size="m"><Header variant="h3">Add authenticator</Header><FormField label="Authenticator name" description="For example, Google Password Manager or Physical security key."><Input data-testid="webauthn-name-input" autoFocus={embedded} value={name} disabled={busy} onChange={({detail})=>setName(detail.value)}/></FormField>
-    <Button data-testid="webauthn-enroll-button" disabled={busy||!name.trim()} loading={busy} onClick={()=>void enroll()}>Add passkey or security key</Button>
-    {busy&&<Button data-testid="webauthn-enroll-cancel-button" onClick={()=>{cancelled.current=true;WebAuthnAbortService.cancelCeremony();}}>Cancel authenticator</Button>}
-    {embedded&&!busy&&(!discard?<Button onClick={()=>{if(name.trim())setDiscard(true);else{setCreating(false);setError('');}}}>Cancel setup</Button>:<Alert type="warning" header="Discard authenticator setup?"><SpaceBetween direction="horizontal" size="s"><Button onClick={()=>setDiscard(false)}>Keep setting up</Button><Button onClick={()=>{setName('');setCreating(false);setDiscard(false);setError('');}}>Discard setup</Button></SpaceBetween></Alert>)}
-    </SpaceBetween>}
+    {!embedded&&<Button disabled={busy} onClick={openCreate}>Add authenticator</Button>}
+    {creating&&<Modal visible header={discard?'Discard authenticator setup?':'Add passkey or security key'} closeAriaLabel="Close authenticator setup" onDismiss={closeCreate} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
+      {discard?<><Button ref={keepSetup} onClick={()=>setDiscard(false)}>Keep setting up</Button><Button variant="primary" onClick={discardCreate}>Discard setup</Button></>:<>
+        <Button variant="link" disabled={busy} onClick={closeCreate}>Cancel setup</Button>
+        <Button data-testid="webauthn-enroll-button" variant="primary" form={registrationForm} formAction="submit" disabled={busy||!name.trim()} loading={busy}>Add passkey or security key</Button>
+      </>}
+    </SpaceBetween></Box>}>
+      {discard?<Box>Your authenticator setup details will be discarded.</Box>:<form id={registrationForm} onSubmit={event=>{event.preventDefault();void enroll();}}><SpaceBetween size="l">
+        <Box>Name your authenticator, then use your browser’s chooser to create a passkey in your password manager or register a physical security key. After registration, sign in again to continue.</Box>
+        <FormField label="Authenticator name" description="For example, Google Password Manager or Physical security key."><Input ref={nameInput} data-testid="webauthn-name-input" value={name} disabled={busy} onChange={({detail})=>setName(detail.value)}/></FormField>
+        {busy&&<Button data-testid="webauthn-enroll-cancel-button" formAction="none" onClick={()=>{cancelled.current=true;WebAuthnAbortService.cancelCeremony();}}>Cancel authenticator</Button>}
+        {error&&<Alert type="error">{error}</Alert>}
+      </SpaceBetween></form>}
+    </Modal>}
     {removing&&<Modal visible header={`Remove ${removing.name}?`} closeAriaLabel="Close removal confirmation" onDismiss={()=>{if(!busy)setRemoving(null);}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" disabled={busy} onClick={()=>setRemoving(null)}>Cancel</Button><Button variant="primary" loading={busy} onClick={()=>void remove(removing.id)}>Remove authenticator</Button></SpaceBetween></Box>}><SpaceBetween size="m"><Box>You will no longer be able to use {removing.name} to sign in. Removing it signs you out. Make sure you have another sign-in or recovery method available.</Box>{removalError&&<Alert type="error">{removalError}</Alert>}</SpaceBetween></Modal>}
   </SpaceBetween>;
-  return embedded?<Container data-testid="webauthn-settings-section" header={<Header variant="h2" counter={`(${credentials.length})`} actions={<Button disabled={creating||busy} onClick={()=>{createTrigger.current=document.activeElement as HTMLElement;setCreating(true);setError('');}}>Add authenticator</Button>}>Passkeys and security keys</Header>}>{content}</Container>:<ExpandableSection data-testid="webauthn-settings-section" headerText="Passkeys and security keys">{content}</ExpandableSection>;
+  return embedded?<Container data-testid="webauthn-settings-section" header={<Header variant="h2" counter={`(${credentials.length})`} actions={<Button disabled={creating||busy} onClick={openCreate}>Add authenticator</Button>}>Passkeys and security keys</Header>}>{content}</Container>:<ExpandableSection data-testid="webauthn-settings-section" headerText="Passkeys and security keys">{content}</ExpandableSection>;
 }

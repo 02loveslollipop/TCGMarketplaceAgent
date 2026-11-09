@@ -108,6 +108,7 @@ describe('Cloudscape chat',()=>{
     vi.stubGlobal('fetch',vi.fn(async(path:string)=>json(path.endsWith('/credentials')?[]:path.endsWith('/options')?{challenge_id:'ceremony-1',options:{challenge:'challenge'}}:{enrolled:true,sign_in_again:true})));
     const user=userEvent.setup(),changed=vi.fn();render(<WebAuthnSettings token="access-token" onChange={changed}/>);
     await user.click(screen.getByRole('button',{name:'Passkeys and security keys'}));
+    await user.click(screen.getByRole('button',{name:'Add authenticator'}));
     await user.type(screen.getByLabelText('Authenticator name'),'Physical key');
     await user.click(screen.getByRole('button',{name:'Add passkey or security key'}));
     await waitFor(()=>expect(changed).toHaveBeenCalledOnce());
@@ -120,6 +121,7 @@ describe('Cloudscape chat',()=>{
     vi.stubGlobal('fetch',vi.fn(async(path:string)=>json(path.endsWith('/credentials')?[]:path.endsWith('/options')?{challenge_id:'cancel-me',options:{challenge:'challenge'}}:{cancelled:true})));
     const user=userEvent.setup(),changed=vi.fn();render(<WebAuthnSettings token="access-token" onChange={changed}/>);
     await user.click(screen.getByRole('button',{name:'Passkeys and security keys'}));
+    await user.click(screen.getByRole('button',{name:'Add authenticator'}));
     await user.type(screen.getByLabelText('Authenticator name'),'Phone');
     await user.click(screen.getByRole('button',{name:'Add passkey or security key'}));
     expect(await screen.findByText('Authenticator operation was cancelled or timed out. You can try again.')).toBeInTheDocument();
@@ -148,7 +150,7 @@ describe('Cloudscape chat',()=>{
     const pending=new Promise<Response>(resolve=>{resolveOptions=resolve;});
     vi.stubGlobal('fetch',vi.fn(async(path:string)=>path.endsWith('/options')?pending:json(path.endsWith('/credentials')?[]:{cancelled:true})));
     const user=userEvent.setup();render(<WebAuthnSettings token="access-token" onChange={()=>{}}/>);
-    await user.click(screen.getByRole('button',{name:'Passkeys and security keys'}));await user.type(screen.getByLabelText('Authenticator name'),'Phone');
+    await user.click(screen.getByRole('button',{name:'Passkeys and security keys'}));await user.click(screen.getByRole('button',{name:'Add authenticator'}));await user.type(screen.getByLabelText('Authenticator name'),'Phone');
     await user.click(screen.getByRole('button',{name:'Add passkey or security key'}));await user.click(screen.getByRole('button',{name:'Cancel authenticator'}));
     resolveOptions(json({challenge_id:'cancel-before-prompt',options:{challenge:'challenge'}}));
     await screen.findByText('Authenticator operation was cancelled or timed out. You can try again.');

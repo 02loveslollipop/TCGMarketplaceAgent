@@ -1,4 +1,4 @@
-import {render,screen,within,waitFor} from '@testing-library/react';
+import {fireEvent,render,screen,within,waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,expect,it,vi} from 'vitest';
 import {RolePolicies} from '../RolePolicies';
@@ -65,13 +65,25 @@ it('creates an authenticator app in place and protects cancellation',async()=>{
  expect(screen.queryByRole('img',{name:'Authenticator setup QR code'})).not.toBeInTheDocument();expect(done).not.toHaveBeenCalled();
 });
 
-it('opens a named passkey form beside the authenticator list and restores focus after cancel',async()=>{
+it('opens passkey setup in a modal and protects dismissal before restoring focus',async()=>{
  vi.stubGlobal('fetch',vi.fn(async()=>json([])));
  const user=userEvent.setup();render(<WebAuthnSettings embedded token="fixture" onChange={vi.fn()}/>);
  const add=screen.getByRole('button',{name:'Add authenticator'});
  expect(screen.queryByLabelText('Authenticator name')).not.toBeInTheDocument();
- await user.click(add);expect(screen.getByLabelText('Authenticator name')).toHaveFocus();await user.type(screen.getByLabelText('Authenticator name'),'Fixture key');
- expect(screen.getByTestId('webauthn-credentials-table')).toBeInTheDocument();expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+ await user.click(add);
+ const dialog=screen.getByRole('dialog',{name:'Add passkey or security key'});
+ expect(dialog).toContainElement(document.activeElement as HTMLElement);
+ await user.type(within(dialog).getByLabelText('Authenticator name'),'Fixture key');
+ expect(screen.getByTestId('webauthn-credentials-table')).toBeInTheDocument();
+ expect(within(dialog).getByLabelText('Authenticator name')).toHaveValue('Fixture key');
+ fireEvent.keyDown(within(dialog).getByLabelText('Authenticator name'),{key:'Escape',code:'Escape',keyCode:27});
+ expect(screen.getByRole('dialog',{name:'Discard authenticator setup?'})).toBeInTheDocument();
+ expect(screen.getByRole('button',{name:'Keep setting up'})).toHaveFocus();
+ await user.click(screen.getByRole('button',{name:'Keep setting up'}));
+ expect(screen.getByLabelText('Authenticator name')).toHaveValue('Fixture key');
+ expect(screen.getByLabelText('Authenticator name')).toHaveFocus();
  await user.click(screen.getByRole('button',{name:'Cancel setup'}));await user.click(screen.getByRole('button',{name:'Discard setup'}));
+ expect(screen.queryByRole('dialog')).not.toBeInTheDocument();
+ expect(vi.mocked(fetch).mock.calls.some(call=>call[1]?.method==='POST')).toBe(false);
  expect(screen.queryByLabelText('Authenticator name')).not.toBeInTheDocument();await waitFor(()=>expect(add).toHaveFocus());
 });
