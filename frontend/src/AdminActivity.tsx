@@ -36,8 +36,8 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
     setError(null);
     try {
       const [execList, legStatus] = await Promise.all([
-        api<AdminExecutionSummary[]>('/api/activity', token),
-        api<LegalityStatus>('/api/legality/status', token),
+        api<AdminExecutionSummary[]>('/api/admin/activity', token),
+        api<LegalityStatus>('/api/admin/legality/status', token),
       ]);
       setExecutions(execList || []);
       setLegality(legStatus || null);
@@ -56,7 +56,7 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
     setRefreshingLegality(true);
     setError(null);
     try {
-      const updated = await api<LegalityStatus>('/api/legality/refresh', token, { method: 'POST' });
+      const updated = await api<LegalityStatus>('/api/admin/legality/refresh', token, { method: 'POST' });
       setLegality(updated);
     } catch (err: any) {
       setError(err.message || 'Failed to refresh legality database.');
@@ -68,7 +68,7 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
   const handleViewDetail = async (executionId: string) => {
     setLoadingDetail(true);
     try {
-      const detail = await api<AdminExecutionDetail>(`/api/activity/${executionId}`, token);
+      const detail = await api<AdminExecutionDetail>(`/api/admin/activity/${executionId}`, token);
       setSelectedExecution(detail);
     } catch (err: any) {
       setError(err.message || 'Failed to load execution detail.');
@@ -296,7 +296,7 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
                       </span>
                     }
                   >
-                    {ev.kind === 'reasoning' && ev.payload?.summary ? (
+                    {(ev.kind === 'thinking' || ev.kind === 'reasoning') && ev.payload?.summary ? (
                       <Markdown content={ev.payload.summary} />
                     ) : (
                       <pre style={{ margin: 0, overflowX: 'auto', fontSize: '12px' }}>
@@ -307,6 +307,26 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
                 ))}
               </SpaceBetween>
             </Container>
+
+            {selectedExecution.logs && selectedExecution.logs.length > 0 && (
+              <Container header={<Header variant="h3">Audit Logs</Header>}>
+                <SpaceBetween size="xs">
+                  {selectedExecution.logs.map((log) => (
+                    <Box key={log.id} fontSize="body-s">
+                      <strong>{log.action}</strong> ·{' '}
+                      <span style={{ color: '#687078' }}>
+                        {new Date(log.created_at).toLocaleTimeString()}
+                      </span>
+                      {log.details && (
+                        <pre style={{ margin: '4px 0 0 0', overflowX: 'auto', fontSize: '11px' }}>
+                          {JSON.stringify(log.details, null, 2)}
+                        </pre>
+                      )}
+                    </Box>
+                  ))}
+                </SpaceBetween>
+              </Container>
+            )}
           </SpaceBetween>
         </Modal>
       )}

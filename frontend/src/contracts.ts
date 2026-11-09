@@ -64,5 +64,6 @@ export interface AdminExecutionDetail {
   checkpoint: Record<string, unknown>;
   reasoning_summary: string;
   events: { id: string; kind: string; payload: any; created_at: string }[];
+  logs?: { id: string; action: string; details: any; created_at: string }[];
 }
 

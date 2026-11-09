@@ -30,7 +30,7 @@ describe('Cloudscape chat',()=>{
     await screen.findByText('GPT test');
     await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'Find Test ex');
     await user.click(screen.getByRole('button',{name:'Send request'}));
-    expect(await screen.findByText('Resolved printings')).toBeInTheDocument();
+    expect(await screen.findByText(/I resolved these card printings/)).toBeInTheDocument();
     await user.click(await screen.findByRole('button',{name:'Review deck list'}));
     expect(await screen.findByRole('img',{name:'Test ex card'})).toHaveAttribute('src',card.image_url);
     await user.click(screen.getByRole('button',{name:'Table'}));

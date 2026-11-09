@@ -151,7 +151,7 @@ it('rejects unsupported, oversized and excess image attachments before making a 
   expect(vi.mocked(fetch).mock.calls.some(call=>call[1]?.method==='POST')).toBe(false);
 });
 
-it('shows collapsed provider reasoning and complete tool calls and restores their saved history',async()=>{
+it('shows collapsed provider reasoning and restores saved history without mixing in tool calls',async()=>{
   const thought={type:'thinking',data:{id:'reasoning-1',source:'provider_summary',status:'complete',summary:'Compare the verified printings first.'}} as const;
   const tool:Extract<AgentEvent,{type:'tool'}>={type:'tool',data:{id:'tool-1',name:'search_cards',status:'complete',input:{name:'Lucario'},sources:[{url:'https://example.com/cards',title:'Verified card source'}],duration_ms:200}};
   vi.stubGlobal('fetch',vi.fn(async(path:string)=>{
@@ -165,11 +165,11 @@ it('shows collapsed provider reasoning and complete tool calls and restores thei
   const expand=await screen.findByRole('button',{name:'Completed thinking'});
   expect(expand).toHaveAttribute('aria-expanded','false');await user.click(expand);
   expect(screen.getAllByText('Compare the verified printings first.')).toHaveLength(1);
-  expect(screen.getByRole('link',{name:/Verified card source/})).toHaveAttribute('href','https://example.com/cards');
+  expect(screen.queryByRole('list',{name:'Tool call search_cards'})).not.toBeInTheDocument();
   await user.click(screen.getByRole('button',{name:'Saved research trace'}));
   await user.click(await screen.findByRole('button',{name:'Completed thinking'}));
   expect(screen.getAllByText('Compare the verified printings first.')).toHaveLength(1);
-  expect(screen.getByRole('list',{name:'Tool call search_cards'})).toBeInTheDocument();
+  expect(screen.queryByRole('list',{name:'Tool call search_cards'})).not.toBeInTheDocument();
 });
 
 it('keeps reasoning updates scoped to their own request and labels unfinished summaries as interrupted',async()=>{

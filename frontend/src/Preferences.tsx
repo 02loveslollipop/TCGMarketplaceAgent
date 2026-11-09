@@ -27,7 +27,7 @@ export const Preferences: React.FC<PreferencesProps> = ({ token }) => {
     let active = true;
     const load = async () => {
       try {
-        const data = await api<UserPreferences>('/api/preferences', token);
+        const data = await api<UserPreferences>('/api/chat/preferences', token);
         if (active && data) {
           setRuleset(data.ruleset || 'auto');
           setFormat(data.format || 'auto');
@@ -51,7 +51,7 @@ export const Preferences: React.FC<PreferencesProps> = ({ token }) => {
     setStatusMessage(null);
     setErrorMessage(null);
     try {
-      await api<UserPreferences>('/api/preferences', token, {
+      await api<UserPreferences>('/api/chat/preferences', token, {
         method: 'PUT',
         body: JSON.stringify({ ruleset, format }),
       });

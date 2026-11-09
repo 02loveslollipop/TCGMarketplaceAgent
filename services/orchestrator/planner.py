@@ -91,12 +91,12 @@ class Planner:
         plan = await self.model.with_structured_output(AgentPlan, method="function_calling").ainvoke(
             messages + [HumanMessage(content="Return the resolved plan or one concise clarification question with selectable options. Sources must be URLs actually retrieved by the tools.")]
         )
-        plan = self.validate(plan)
+        plan = self.validate(plan, preferences=preferences)
         if plan.explanation:
             event_writer()({"type": "thinking", "data": {"id": uuid.uuid4().hex, "status": "complete", "source": "approach_summary", "summary": plan.explanation[:6000]}})
         return plan
 
-    def validate(self, plan: AgentPlan) -> AgentPlan:
+    def validate(self, plan: AgentPlan, preferences: dict | None = None) -> AgentPlan:
         if plan.question:
             return plan
         if not plan.cards or not plan.format:
@@ -152,6 +152,43 @@ class Planner:
                 else:
                     card.cardmarket_url = None
 
+        pref_ruleset = (preferences or {}).get("ruleset", "auto")
+        target_fmt = (plan.format or "standard").lower()
+
+        # Check for cross-ruleset legality conflict when ruleset is auto
+        if pref_ruleset == "auto" and not plan.ruleset and self.research.repository:
+            intl_cat = self.research.repository.query_legality_catalog(ruleset="international", format_=target_fmt)
+            jp_cat = self.research.repository.query_legality_catalog(ruleset="japan", format_=target_fmt)
+
+            intl_bans = {normalized(b["card_name"]): b for b in intl_cat.get("banned_cards", [])}
+            intl_ban_ids = {b["card_id"] for b in intl_cat.get("banned_cards", []) if b.get("card_id")}
+
+            jp_bans = {normalized(b["card_name"]): b for b in jp_cat.get("banned_cards", [])}
+            for b in jp_cat.get("banned_cards", []):
+                if b.get("card_name_ja"):
+                    jp_bans[normalized(b["card_name_ja"])] = b
+            jp_ban_ids = {b["card_id"] for b in jp_cat.get("banned_cards", []) if b.get("card_id")}
+
+            conflicts = []
+            for card in plan.cards:
+                norm_cname = normalized(card.name)
+                is_intl_banned = card.card_id in intl_ban_ids or norm_cname in intl_bans
+                is_jp_banned = card.card_id in jp_ban_ids or norm_cname in jp_bans
+                if is_intl_banned != is_jp_banned:
+                    conflicts.append((card.name, is_intl_banned, is_jp_banned))
+
+            if conflicts:
+                c_name, is_intl, _ = conflicts[0]
+                banned_ruleset = "International" if is_intl else "Japan"
+                legal_ruleset = "Japan" if is_intl else "International"
+                return AgentPlan(
+                    question=f"Card '{c_name}' has different tournament legality: it is banned in {banned_ruleset} {target_fmt.capitalize()} format, but legal in {legal_ruleset}. Which ruleset should this deck follow?",
+                    options=["International (Play! Pokémon)", "Japan (Official Pokémon Card)"],
+                )
+
+        if not plan.ruleset:
+            plan.ruleset = pref_ruleset if pref_ruleset in {"international", "japan"} else "international"
+
         plan.sources = [
             source for url, source in self.research.sources.items()
             if url in {str(source.url) for source in plan.sources} or "api.tcgdex.net" in url or "limitlesstcg.com" in url
@@ -181,6 +218,10 @@ class Planner:
             sync_state = catalog.get("sync_state", {})
             std_marks = set(sync_state.get(f"{ruleset}_standard_marks", ["H", "I", "J"]))
 
+            legal_sets = catalog.get("sets", [])
+            legal_tcgdex_ids = {s["tcgdex_id"].lower() for s in legal_sets if s.get("tcgdex_id")}
+            legal_set_codes = {s["set_code"].upper() for s in legal_sets if s.get("set_code")}
+
             for card in plan.cards:
                 norm_cname = normalized(card.name)
                 # Check banned
@@ -188,9 +229,23 @@ class Planner:
                     reason = (banned_map.get(norm_cname) or {}).get("reason", "Official banned list")
                     issues.append(f"Card '{card.name}' is banned in {ruleset.capitalize()} {fmt.capitalize()} format ({reason}).")
 
+                meta = self.research.cards.get(card.card_id, {})
+                set_obj = meta.get("set") or {}
+                card_set_id = (set_obj.get("id") or "").lower()
+                if not card_set_id and "-" in card.card_id:
+                    card_set_id = card.card_id.split("-")[0].lower()
+                card_set_code = (set_obj.get("tcgOnline") or card.set_name or "").upper()
+
+                # Check set legality for Standard and Expanded
+                if not card.basic_energy and fmt in {"standard", "expanded"} and legal_sets:
+                    if card_set_id:
+                        is_legal_set = (card_set_id in legal_tcgdex_ids) or (card_set_code and card_set_code in legal_set_codes)
+                        if not is_legal_set:
+                            set_display = set_obj.get("name") or card.set_name or card_set_id.upper()
+                            issues.append(f"Card '{card.name}' is from set '{set_display}', which is not legal in {ruleset.capitalize()} {fmt.capitalize()} format.")
+
                 # Check Standard regulation mark
                 if fmt == "standard" and not card.basic_energy:
-                    meta = self.research.cards.get(card.card_id, {})
                     reg_mark = meta.get("regulationMark")
                     if reg_mark and reg_mark not in std_marks:
                         issues.append(f"Card '{card.name}' has regulation mark '{reg_mark}', which is not in active {ruleset.capitalize()} Standard marks ({', '.join(sorted(std_marks))}).")

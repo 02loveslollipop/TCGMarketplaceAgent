@@ -1,6 +1,7 @@
 import {useState} from 'react';
 import {ExpandableSection,FormField,Input,SpaceBetween} from '@cloudscape-design/components';
 import {QRCodeSVG} from 'qrcode.react';
+import {settingsInputAttributes} from './inputSemantics';
 
 export function TotpSetup({secret,uri}:{secret:string;uri:string}) {
   const [expanded,setExpanded]=useState(false);
@@ -9,7 +10,7 @@ export function TotpSetup({secret,uri}:{secret:string;uri:string}) {
     <QRCodeSVG value={uri} size={224} level="M" marginSize={4} role="img" aria-label="Authenticator setup QR code"/>
     <ExpandableSection headerText="Can't scan the QR code?" expanded={expanded} onChange={({detail})=>setExpanded(detail.expanded)}>
       {expanded&&<FormField label="Setup key" description="Enter this key manually in your authenticator app.">
-        <Input name="authenticator-setup-key" autoComplete="off" value={secret} readOnly/>
+        <Input name="authenticator-setup-key" autoComplete="off" nativeInputAttributes={settingsInputAttributes} value={secret} readOnly/>
       </FormField>}
     </ExpandableSection>
   </SpaceBetween>;

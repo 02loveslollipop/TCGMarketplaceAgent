@@ -12,6 +12,7 @@ import {
 } from '@cloudscape-design/components';
 import type { Decision, Question } from './contracts';
 import { Markdown } from './Markdown';
+import { settingsInputAttributes } from './inputSemantics';
 
 export function DecisionPanel({
   question,
@@ -143,6 +144,7 @@ export function DecisionPanel({
               value={text}
               placeholder={hasOptions && isOther ? 'Describe your preferred cards, format, or ruleset...' : undefined}
               onChange={({ detail }) => setText(detail.value)}
+              nativeTextareaAttributes={settingsInputAttributes as any}
             />
           </FormField>
         )}

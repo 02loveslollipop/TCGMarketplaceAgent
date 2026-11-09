@@ -1,9 +1,10 @@
-"""Free research tools. Retrieved text is untrusted evidence, never instructions."""
 import asyncio
 from html.parser import HTMLParser
 import ipaddress
+import json
 import re
 import socket
+from typing import Any
 from urllib.parse import quote, urlparse
 import httpx
 from ddgs import DDGS
@@ -12,6 +13,11 @@ from langchain_core.tools import tool
 
 from shared.contracts import Source, utcnow
 from shared.repository import Repository
+from services.orchestrator.legality_sync import (
+    POKEMON_CARD_JP_URL,
+    should_refresh_legality,
+    sync_legality,
+)
 
 TCGDEX_GQL_URL = "https://api.tcgdex.net/v2/graphql"
 LIMITLESS_DECKS_URL = "https://limitlesstcg.com/decks"
@@ -100,20 +106,114 @@ class Research:
         self.sources[str(source.url)] = source
         return source.model_dump(mode="json")
 
-    async def query_tcgdex_graphql(self, query: str, variables: dict | None = None) -> dict:
-        """Execute a direct GraphQL query against TCGdex GraphQL endpoint."""
+    def _extract_and_cache_cards(self, node: Any) -> list[dict]:
+        """Recursively inspect GraphQL node and cache cards containing id and name."""
+        cached = []
+        if isinstance(node, dict):
+            if "id" in node and "name" in node and isinstance(node["id"], str):
+                self.cards[node["id"]] = node
+                cached.append(node)
+            for v in node.values():
+                cached.extend(self._extract_and_cache_cards(v))
+        elif isinstance(node, list):
+            for item in node:
+                cached.extend(self._extract_and_cache_cards(item))
+        return cached
+
+    async def query_tcgdex_graphql(
+        self,
+        query: str = "",
+        variables: dict | None = None,
+        *,
+        name: str = "",
+        set_id: str = "",
+        local_id: str = "",
+        regulation_mark: str = "",
+        category: str = "",
+        stage: str = "",
+        trainer_type: str = "",
+        energy_type: str = "",
+        rarity: str = "",
+        language: str = "en",
+        limit: int = 20,
+    ) -> dict:
+        """Execute a direct GraphQL query or structured filter search against TCGdex GraphQL endpoint."""
+        q = (query or "").strip()
+        lang = "ja" if language.lower() in {"ja", "japan", "japanese"} else "en"
+        if not q:
+            filter_parts = []
+            if name:
+                filter_parts.append(f"name: {json.dumps(name)}")
+            if local_id:
+                filter_parts.append(f"localId: {json.dumps(local_id)}")
+            if regulation_mark:
+                filter_parts.append(f"regulationMark: {json.dumps(regulation_mark)}")
+            if category:
+                filter_parts.append(f"category: {json.dumps(category)}")
+            if stage:
+                filter_parts.append(f"stage: {json.dumps(stage)}")
+            if trainer_type:
+                filter_parts.append(f"trainerType: {json.dumps(trainer_type)}")
+            if energy_type:
+                filter_parts.append(f"energyType: {json.dumps(energy_type)}")
+            if rarity:
+                filter_parts.append(f"rarity: {json.dumps(rarity)}")
+
+            filters_str = f"filters: {{ {', '.join(filter_parts)} }}, " if filter_parts else ""
+            items_limit = max(1, min(limit or 20, 100))
+
+            q = f"""query SearchCards {{
+  cards({filters_str}pagination: {{ page: 1, itemsPerPage: {items_limit} }}) @locale(lang: "{lang}") {{
+    id
+    localId
+    name
+    image
+    category
+    hp
+    stage
+    trainerType
+    energyType
+    regulationMark
+    rarity
+    legal {{
+      standard
+      expanded
+    }}
+    set {{
+      id
+      name
+      releaseDate
+      tcgOnline
+    }}
+  }}
+}}"""
+
         self.network_budget()
         async with httpx.AsyncClient(timeout=20) as client:
-            resp = await client.post(TCGDEX_GQL_URL, json={"query": query, "variables": variables or {}})
+            resp = await client.post(TCGDEX_GQL_URL, json={"query": q, "variables": variables or {}})
             resp.raise_for_status()
             data = resp.json()
-            source = Source(
-                url=TCGDEX_GQL_URL,
-                title="TCGdex GraphQL API",
-                excerpt=str(data)[:2000],
-            )
-            self.sources[TCGDEX_GQL_URL] = source
-            return data
+
+        # Cache every card containing 'id' and 'name'
+        self._extract_and_cache_cards(data.get("data"))
+
+        # Client-side filtering by set_id if specified
+        if set_id and isinstance(data.get("data"), dict) and isinstance(data["data"].get("cards"), list):
+            target_set = set_id.strip().lower()
+            filtered_cards = [
+                c for c in data["data"]["cards"]
+                if (c.get("set") or {}).get("id", "").lower() == target_set
+                or (c.get("set") or {}).get("tcgOnline", "").lower() == target_set
+            ]
+            data["data"]["cards"] = filtered_cards
+
+        source = Source(
+            url=TCGDEX_GQL_URL,
+            title="TCGdex GraphQL API",
+            excerpt=str(data)[:2000],
+        )
+        self.sources[TCGDEX_GQL_URL] = source
+        return data
 
     async def search_cards(self, name: str, language: str = "en") -> list[dict]:
         """Search cards via TCGdex GraphQL API, returning full metadata in 1 request."""
@@ -404,6 +504,11 @@ class Research:
     async def legality_knowledge(self) -> dict:
         """Fetch dated current official format and banned-card knowledge from DB or official rules."""
         if self.repository:
+            try:
+                if should_refresh_legality(self.repository):
+                    await asyncio.to_thread(sync_legality, self.repository, "auto_weekly")
+            except Exception:
+                pass
             catalog = self.repository.query_legality_catalog()
             return {
                 "as_of": utcnow().isoformat(),
@@ -440,9 +545,35 @@ class Research:
 
     def tools(self):
         @tool
-        async def query_tcgdex_graphql(query: str) -> dict:
-            """Query Pokemon card metadata, sets, regulation marks, or printings directly from TCGdex GraphQL API (POST https://api.tcgdex.net/v2/graphql). Supports @locale(lang: 'en'|'ja') and CardsFilters."""
-            return await self.query_tcgdex_graphql(query)
+        async def query_tcgdex_graphql(
+            query: str = "",
+            name: str = "",
+            set_id: str = "",
+            local_id: str = "",
+            regulation_mark: str = "",
+            category: str = "",
+            stage: str = "",
+            trainer_type: str = "",
+            energy_type: str = "",
+            rarity: str = "",
+            language: str = "en",
+            limit: int = 20,
+        ) -> dict:
+            """Query Pokemon card metadata, sets, regulation marks, or printings directly from TCGdex GraphQL API (POST https://api.tcgdex.net/v2/graphql). You can provide either a raw GraphQL `query` string, or structured filter arguments like `name`, `set_id`, `local_id`, `regulation_mark`, `category`, `stage`, `trainer_type`, `energy_type`, `rarity`, `language` ('en' or 'ja'), and `limit`. Returned cards are automatically cached for deck planning."""
+            return await self.query_tcgdex_graphql(
+                query=query,
+                name=name,
+                set_id=set_id,
+                local_id=local_id,
+                regulation_mark=regulation_mark,
+                category=category,
+                stage=stage,
+                trainer_type=trainer_type,
+                energy_type=energy_type,
+                rarity=rarity,
+                language=language,
+                limit=limit,
+            )
 
         @tool
         async def search_cards(name: str, language: str = "en") -> list[dict]:

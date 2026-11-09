@@ -13,7 +13,10 @@ def event_writer():
 
 def tool_start(name, arguments):
     trace=(uuid.uuid4().hex,time.monotonic())
-    public={key:str(value)[:1000] for key,value in arguments.items() if key in {"query","name","url","card_id","card_ids","supplier"}}
+    public={key:str(value)[:1000] for key,value in arguments.items() if key in {
+        "query","name","url","card_id","card_ids","supplier",
+        "ruleset","format","set_query","card_query","deck_id_or_list_id","language","regulation_mark",
+    }}
     if "url" in public and any(key in public["url"].lower() for key in ("token=","key=","signature=","auth=")):
         public["url"]="URL with sensitive parameters omitted"
     event_writer()({"type":"tool","data":{"id":trace[0],"name":name,"status":"loading","input":public,"sources":[]}})

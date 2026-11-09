@@ -444,11 +444,34 @@ class Repository:
                 raise NotFound("Execution not found")
             execution, conv_title = row
             events = list(session.scalars(select(Event).where(Event.execution_id == execution_id).order_by(Event.created_at)))
+            logs = list(session.scalars(select(AuditLog).where(AuditLog.execution_id == execution_id).order_by(AuditLog.created_at)))
             checkpoint = execution.checkpoint or {}
-            reasoning_summary = ""
+
+            provider_summaries = []
+            approach_summaries = []
+            generic_summaries = []
             for ev in events:
-                if ev.kind == "reasoning":
-                    reasoning_summary = ev.payload.get("summary", "")
+                if ev.kind in {"thinking", "reasoning"}:
+                    p = ev.payload or {}
+                    if p.get("status") != "loading" and p.get("summary"):
+                        src = p.get("source")
+                        summary_txt = p.get("summary", "").strip()
+                        if src == "provider_summary":
+                            provider_summaries.append(summary_txt)
+                        elif src == "approach_summary":
+                            approach_summaries.append(summary_txt)
+                        else:
+                            generic_summaries.append(summary_txt)
+
+            parts = []
+            if provider_summaries:
+                parts.append("### Provider Reasoning\n" + "\n\n".join(provider_summaries))
+            if approach_summaries:
+                parts.append("### Approach Summary\n" + "\n\n".join(approach_summaries))
+            if generic_summaries and not parts:
+                parts.append("\n\n".join(generic_summaries))
+            reasoning_summary = "\n\n".join(parts)
+
             return {
                 "id": execution.id,
                 "conversation_id": execution.conversation_id,
@@ -467,6 +490,15 @@ class Repository:
                         "created_at": ev.created_at.isoformat(),
                     }
                     for ev in events
+                ],
+                "logs": [
+                    {
+                        "id": l.id,
+                        "action": l.action,
+                        "details": l.details,
+                        "created_at": l.created_at.isoformat(),
+                    }
+                    for l in logs
                 ],
             }
 
