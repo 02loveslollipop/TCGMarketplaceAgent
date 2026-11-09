@@ -396,6 +396,26 @@ async def test_research_search_ddg_mcp():
 
 
 @pytest.mark.asyncio
+async def test_research_search_ddg_mcp_e2e_in_process():
+    import services.ddg_mcp.main as ddg_main
+
+    research = Research(mcp_url="")
+    sample_html = '<div class="result"><h2 class="result__title"><a href="https://limitlesstcg.com/decks">Limitless Decks</a></h2><a class="result__snippet">Tournament lists</a></div>'
+
+    async def mock_request(data, ctx):
+        return sample_html
+
+    with patch.object(ddg_main.ddg_server.searcher, "_request", side_effect=mock_request) as mock_req:
+        results = await research.search("limitless decks")
+        assert mock_req.called
+        assert len(results) == 1
+        assert results[0]["title"] == "Limitless Decks"
+        assert results[0]["url"] == "https://limitlesstcg.com/decks"
+        assert results[0]["excerpt"] == "Tournament lists"
+        assert "https://limitlesstcg.com/decks" in research.sources
+
+
+@pytest.mark.asyncio
 async def test_research_fetch_ddg_mcp():
     research = Research()
     mock_content = """# Limitless TCG

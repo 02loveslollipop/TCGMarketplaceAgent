@@ -16,7 +16,7 @@ ref_url_threshold = int(os.getenv("DDG_REF_URL_THRESHOLD", "0"))
 ddg_server.searcher = ddg_server.DuckDuckGoSearcher(
     backend=search_backend,
     ref_url_threshold=ref_url_threshold,
-    safe_search=ddg_server.SAFE_SEARCH_MODE,
+    safe_search=ddg_server.safe_search,
     link_registry=ddg_server.links,
 )
 ddg_server.fetcher = ddg_server.WebContentFetcher(

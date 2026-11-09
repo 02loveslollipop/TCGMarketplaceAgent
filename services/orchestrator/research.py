@@ -81,60 +81,39 @@ class Research:
             raise ValueError("Research network-call limit reached.")
 
     async def _call_ddg_mcp_tool(self, tool_name: str, arguments: dict) -> str:
-        headers = {"Authorization": f"Bearer {self.mcp_auth_token}"} if self.mcp_auth_token else None
+        from mcp.client import Client
+        import services.ddg_mcp.main as ddg_main
+
         if self.mcp_url:
             try:
                 from mcp.client.streamable_http import streamable_http_client
-                from mcp import ClientSession
+                from mcp.shared._httpx_utils import create_mcp_http_client
 
-                async with streamable_http_client(self.mcp_url, headers=headers) as streams:
-                    read, write = streams[:2]
-                    async with ClientSession(read, write) as session:
-                        await session.initialize()
-                        res = await session.call_tool(tool_name, arguments)
-                        if getattr(res, "isError", False):
+                headers = {"Authorization": f"Bearer {self.mcp_auth_token}"} if self.mcp_auth_token else None
+                async with create_mcp_http_client(headers=headers) as http_client:
+                    transport = streamable_http_client(self.mcp_url, http_client=http_client)
+                    async with Client(transport) as client:
+                        res = await client.call_tool(tool_name, arguments)
+                        if getattr(res, "is_error", False) or getattr(res, "isError", False):
                             raise RuntimeError("\n".join(getattr(c, "text", "") for c in res.content))
                         return "\n".join(getattr(c, "text", "") for c in res.content if getattr(c, "text", None))
-            except httpx.ConnectError:
-                pass
+            except Exception as exc:
+                if isinstance(exc, RuntimeError) or (hasattr(exc, "subgroup") and exc.subgroup(RuntimeError) is not None):
+                    raise
+                # On transport/connection errors when local ddg-mcp container is not running, fall through to in-process MCP server
 
-        # Fallback to duckduckgo_mcp_server in-process objects
-        import duckduckgo_mcp_server.server as ddg_server
-
-        class _DummyContext:
-            async def info(self, *a, **kw): pass
-            async def error(self, *a, **kw): pass
-            async def warning(self, *a, **kw): pass
-            async def debug(self, *a, **kw): pass
-
-        ctx = _DummyContext()
-        if tool_name == "search":
-            searcher = ddg_server.DuckDuckGoSearcher(backend="auto", ref_url_threshold=0, link_registry=ddg_server.links)
-            results = await searcher.search(arguments["query"], ctx, max_results=arguments.get("max_results", 10), region=arguments.get("region", ""))
-            return searcher.format_results_for_llm(results)
-        elif tool_name == "fetch_content":
-            fetcher = ddg_server.WebContentFetcher(backend="auto", allow_private_urls=False, parse_mode="markdown", link_registry=ddg_server.links)
-            return await fetcher.fetch_and_parse(
-                arguments["url"],
-                ctx,
-                start_index=arguments.get("start_index", 0),
-                max_length=arguments.get("max_length", 8000),
-                backend=arguments.get("backend"),
-                parse_mode=arguments.get("parse_mode"),
-            )
-        elif tool_name == "expand_link":
-            token = arguments.get("token", "")
-            resolved = ddg_server.links.resolve(token)
-            return resolved if resolved is not None else token
-        else:
-            raise ValueError(f"Unknown tool: {tool_name}")
+        async with Client(ddg_main.ddg_server.mcp) as client:
+            res = await client.call_tool(tool_name, arguments)
+            if getattr(res, "is_error", False) or getattr(res, "isError", False):
+                raise RuntimeError("\n".join(getattr(c, "text", "") for c in res.content))
+            return "\n".join(getattr(c, "text", "") for c in res.content if getattr(c, "text", None))
 
     async def search(self, query: str) -> list[dict]:
         self.network_budget()
         raw = await self._call_ddg_mcp_tool("search", {"query": query[:500], "max_results": 8})
         results = []
         matches = re.finditer(
-            r"^\d+\.\s+(.+?)\n\s*URL:\s*(\S+)\n\s*Summary:\s*(.+?)(?=\n\d+\.|\Z)",
+            r"^\d+\.\s+(.+?)\n\s*URL:\s*(\S+)[^\n]*\n\s*Summary:\s*(.*?)(?=\n\s*\n|\n\d+\.\s|\Z)",
             raw,
             re.MULTILINE | re.DOTALL,
         )
@@ -640,7 +619,7 @@ class Research:
         query = f"site:pokemon.com Pokemon TCG Standard format rotation banned cards {utcnow().date().isoformat()}"
         try:
             results = await self.search(query)
-        except (DDGSException, httpx.HTTPError, OSError, ValueError):
+        except (DDGSException, RuntimeError, httpx.HTTPError, OSError, ValueError):
             return {
                 "as_of": utcnow().isoformat(),
                 "official_sources": [],
@@ -652,7 +631,7 @@ class Research:
             if host == "pokemon.com" or host.endswith(".pokemon.com"):
                 try:
                     official.append(await self.fetch(row["url"]))
-                except (httpx.HTTPError, ValueError):
+                except (DDGSException, RuntimeError, httpx.HTTPError, OSError, ValueError):
                     continue
         return {
             "as_of": utcnow().isoformat(),
