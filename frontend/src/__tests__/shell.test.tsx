@@ -17,7 +17,8 @@ it('moves security to a dedicated page while preserving the chat draft and chose
   await user.click(screen.getByRole('button',{name:'Fixture sign in'}));await screen.findByText('GPT test');
   await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'Keep this draft');
   expect(screen.queryByRole('heading',{name:'Account security'})).not.toBeInTheDocument();
-  await user.click(screen.getByRole('link',{name:'Account security'}));
+  await user.click(screen.getByRole('button',{name:'fixture-user'}));
+  await user.click(screen.getByRole('menuitem',{name:'Account security'}));
   expect(screen.getByRole('heading',{name:'Account security'})).toBeInTheDocument();
   expect(screen.queryByRole('textbox',{name:'Purchase request'})).not.toBeInTheDocument();
   await user.click(within(screen.getByTestId('workspace-navigation')).getByRole('link',{name:'Deck agent'}));

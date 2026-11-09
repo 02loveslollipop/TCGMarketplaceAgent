@@ -1,0 +1,55 @@
+/* Full-page chat surface, following the official Cloudscape chat demo. */
+.chat-route { block-size: 100%; min-block-size: 0; }
+.chat-navigation-host { position: absolute; inset: 0; }
+.chat-navigation { display: flex; flex-direction: column; block-size: 100%; min-block-size: 0; }
+.chat-navigation-tabs { flex: 1; min-block-size: 0; }
+.chat-nav-section { padding: 16px; }
+.chat-nav-section > :first-child { margin-block-end: 16px; }
+.chat-page {
+  display: flex;
+  flex-direction: column;
+  block-size: 100%;
+  min-block-size: 0;
+  font-family: var(--chat-font);
+  font-size: var(--chat-font-size);
+  line-height: var(--chat-line-height);
+  color: var(--chat-text);
+}
+.chat-page-landing { justify-content: center; }
+.chat-landing { inline-size: 100%; max-inline-size: 860px; margin-inline: auto; padding: 32px 24px; box-sizing: border-box; }
+.chat-landing-intro { display: flex; flex-direction: column; align-items: center; gap: 12px; margin-block-end: 28px; }
+.chat-starter-prompts { margin-block-start: 24px; }
+.chat-fitted { position: relative; flex-grow: 1; min-block-size: 0; }
+.chat-message-log { position: absolute; inset: 0; overflow-y: auto; overscroll-behavior: contain; scroll-padding-block: 24px; }
+.chat-messages-inner { max-inline-size: 860px; margin-inline: auto; padding: 24px; box-sizing: border-box; }
+.chat-input { flex-shrink: 0; inline-size: 100%; max-inline-size: 860px; margin-inline: auto; padding: 16px 24px; box-sizing: border-box; }
+.chat-composer-content > :not(:last-child) { margin-block-end: 12px; }
+.chat-prompt-tools { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 20px; padding: 4px; }
+.chat-model-control { inline-size: 190px; max-inline-size: 100%; }
+.chat-ai-label { color: var(--chat-ai-label); font-size: 0.875em; }
+.chat-model-notice { color: var(--chat-muted); }
+.chat-user-message { max-inline-size: 82%; margin-inline-start: auto; }
+.chat-message-text { white-space: pre-wrap; overflow-wrap: anywhere; }
+.chat-turn { min-inline-size: 0; }
+.chat-working { margin-block-start: 24px; }
+.chat-activity-trace, .chat-artifact-preview { margin-inline-start: 36px; margin-block-start: 12px; }
+.chat-artifact-preview { max-inline-size: 660px; }
+.chat-artifact-art { display: flex; gap: 8px; }
+.chat-artifact-art img { object-fit: contain; border-radius: 3px; }
+.chat-artifact-metadata { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
+.chat-decision-dock { max-block-size: min(45vh, 360px); overflow: auto; }
+.chat-decision-details { max-block-size: 125px; overflow: auto; }
+.chat-decision-heading { outline-offset: 3px; }
+.chat-jump { text-align: center; }
+.chat-visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+@media (max-width: 688px) {
+  .chat-landing { padding: 24px 12px; }
+  .chat-messages-inner { padding: 20px 12px; }
+  .chat-input { padding: 12px; }
+  .chat-prompt-tools { gap: 8px 12px; }
+  .chat-model-control { inline-size: 160px; }
+  .chat-user-message { max-inline-size: 96%; }
+  .chat-activity-trace, .chat-artifact-preview { margin-inline-start: 0; }
+  .chat-starter-prompts { margin-block-start: 16px; }
+  .chat-decision-dock { max-block-size: 32vh; }
+}

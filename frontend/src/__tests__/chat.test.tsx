@@ -31,11 +31,12 @@ describe('Cloudscape chat',()=>{
     await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'Find Test ex');
     await user.click(screen.getByRole('button',{name:'Send request'}));
     expect(await screen.findByText('Resolved printings')).toBeInTheDocument();
+    await user.click(await screen.findByRole('button',{name:'Review deck list'}));
     expect(await screen.findByRole('img',{name:'Test ex card'})).toHaveAttribute('src',card.image_url);
     await user.click(screen.getByRole('button',{name:'Table'}));
     expect(screen.getByTestId('deck-table')).toHaveTextContent('Test 1');
     expect(screen.getByTestId('deck-table')).toHaveTextContent('4');
-    expect(screen.getByText('Format legality: unverified')).toBeInTheDocument();
+    expect(within(screen.getByRole('dialog',{name:'Deck preview'})).getByText('Format legality: unverified')).toBeInTheDocument();
     const call=vi.mocked(fetch).mock.calls.find(call=>String(call[0]).endsWith('/executions'))!;
     expect((call[1]?.headers as Record<string,string>).Authorization).toBe('Bearer private-token');
     expect(String(call[0])).not.toContain('private-token');
@@ -178,7 +179,7 @@ it('announces model changes in place and uses the selected model for the next re
   const call=vi.mocked(fetch).mock.calls.find(call=>String(call[0]).endsWith('/executions'))!;
   expect(JSON.parse(String(call[1]?.body)).model_id).toBe('mistral-test');
   expect(screen.getByText('Find a Lucario')).toBeInTheDocument();
-  await user.click(select);await user.click(screen.getByRole('option',{name:/GPT test/}));
+  await user.click(within(screen.getByTestId('model-select')).getByRole('button'));await user.click(screen.getByRole('option',{name:/GPT test/}));
   expect(screen.getByText('Find a Lucario')).toBeInTheDocument();
   expect(screen.getByTestId('active-model-summary')).toHaveTextContent('Model changed to GPT test.');
 });
@@ -199,7 +200,7 @@ it('disables model and history changes during a running execution',async()=>{
   await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'Find Lucario');
   await user.click(screen.getByRole('button',{name:'Send request'}));
   expect(within(screen.getByTestId('model-select')).getByRole('button')).toBeDisabled();
-  expect(within(screen.getByTestId('conversation-select')).getByRole('button')).toBeDisabled();
+  expect(screen.getByTestId('new-conversation-button')).toBeDisabled();
   complete(new Response('event: done\ndata: {"status":"complete"}\n\n'));
   await waitFor(()=>expect(within(screen.getByTestId('model-select')).getByRole('button')).toBeEnabled());
 });

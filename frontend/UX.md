@@ -16,9 +16,13 @@ The workspace uses Cloudscape components and existing API contracts. This change
 
 The attribute-editing and hub patterns were also reviewed. A model is one policy with fixed fields, so a focused editor is used rather than a dynamic attribute-row editor. The result summary and tabs provide the relevant details without introducing additional resource operations.
 
+## Chat redesign
+
+The full-page chat follows the official Cloudscape chat demo and GenAI patterns, with Conversations and Event log in the application navigation and a centered landing composer. See [CHAT_UX.md](CHAT_UX.md) for the documentation review, layout, interaction choices and verification scope. The model selector now lives beside the pinned composer; history is a searchable list, activity is a chronological view, and deck/budget artifacts open from previews into a separate review panel.
+
 ## Model-selection feedback
 
-Chat keeps model choice next to conversation selection and announces changes in a polite live region. The composer also names the model for the next request. Both selectors are locked during execution/history loading. A waiting execution keeps its original model; the UI explains that a newly selected model applies to the next new request. Switching to account security preserves the mounted chat, its draft and its selected model.
+Chat keeps model choice beside the request composer and announces changes in a polite live region. The composer also names the model for the next request. Model and conversation selection are locked during execution/history loading. A waiting execution keeps its original model; the UI explains that a newly selected model applies to the next new request. Switching to account security preserves the mounted chat, its draft and its selected model.
 
 ## Sign-in and account recovery
 
