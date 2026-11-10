@@ -37,6 +37,7 @@ jobs:
         env:
           HEROKU_API_KEY: ${{ secrets.HEROKU_API_KEY }}
           AUTH_APP: ${{ vars.HEROKU_AUTH_APP }}
+          MCP_APP: ${{ vars.HEROKU_MCP_APP }}
           ADMIN_APP: ${{ vars.HEROKU_ADMIN_APP }}
           CHAT_APP: ${{ vars.HEROKU_CHAT_APP }}
         run: |
@@ -47,9 +48,15 @@ jobs:
           trap 'rm -f "$askpass"' EXIT
           export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
           cd "$RUNNER_TEMP/heroku-source"
-          for app in "$AUTH_APP" "$CHAT_APP" "$ADMIN_APP"; do
+          for app in "$AUTH_APP" "$MCP_APP" "$CHAT_APP" "$ADMIN_APP"; do
             test -n "$app"
             heroku stack:set heroku-24 --app "$app"
             git -c credential.helper= push --force "https://git.heroku.com/$app.git" HEAD:refs/heads/main
             heroku ps:scale web=1:eco --app "$app"
+          done
+          for app in "$AUTH_APP" "$MCP_APP" "$CHAT_APP" "$ADMIN_APP"; do
+            web_url="$(heroku info --app "$app" --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["app"]["web_url"])')"
+            echo "Checking $app health"
+            curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 2 "${web_url%/}/health"
+            echo
           done

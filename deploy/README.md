@@ -23,6 +23,21 @@ models only after verifying their actual provider API ID. The requested presets
 are `gpt-6-luna`, `gpt-6.1-terra` and `mistral-medium-latest`; enabling a registry
 entry never guarantees inference quota. There is no automatic model replacement.
 
+### Web search MCP service (`ddg-mcp`)
+
+The Compose stack also runs `ddg-mcp`, a stateless DuckDuckGo search/fetch MCP
+server (`services.ddg_mcp.main`) on the private network with outbound internet
+access. It has no database access and is not exposed through the gateway. The
+`orchestrator` reaches it over Streamable HTTP at `DDG_MCP_URL` (default
+`http://ddg-mcp:8000/mcp`, written to `.runtime/orchestrator.env` by the
+provisioner) and sends `Authorization: Bearer $MCP_AUTH_TOKEN`. When
+`MCP_AUTH_TOKEN` is set in root `.env`, the provisioner copies it into
+`.runtime/orchestrator.env` and Compose passes the same value to `ddg-mcp`, which
+then rejects unauthenticated `/mcp` requests with HTTP 401. Optional
+`DDG_SEARCH_BACKEND`, `DDG_FETCH_BACKEND`, `DDG_SAFE_SEARCH` and
+`DDG_REF_URL_THRESHOLD` tune the search server. On Heroku it is a separate Eco app
+(see `deploy/CICD.md`).
+
 ### Local password-only development mode
 
 Two-factor authentication is required by default. For local development only,

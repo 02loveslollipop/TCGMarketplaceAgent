@@ -45,3 +45,16 @@ jobs:
             -e SERVICE_NAME=admin -e PORT=18999 -e DATABASE_URL=sqlite:////tmp/ci.db tcg-agent-test
           trap 'docker logs tcg-agent-test; docker rm -f tcg-agent-test' EXIT
           curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18999/health
+      - name: Verify the ddg_mcp service enforces its bearer token
+        run: |
+          set -eu
+          docker run -d --name tcg-mcp-test -p 127.0.0.1:18998:18998 \
+            -e SERVICE_NAME=ddg_mcp -e PORT=18998 -e MCP_AUTH_TOKEN=ci-token tcg-agent-test
+          trap 'docker logs tcg-mcp-test; docker rm -f tcg-mcp-test' EXIT
+          health_status="$(curl --silent --output /dev/null --write-out '%{http_code}' --retry 15 --retry-all-errors --retry-delay 1 http://127.0.0.1:18998/health)"
+          test "$health_status" = 200
+          mcp_status="$(curl --silent --output /dev/null --write-out '%{http_code}' -X POST \
+            -H 'Content-Type: application/json' -H 'Accept: application/json, text/event-stream' \
+            --data '{"jsonrpc":"2.0","id":1,"method":"ping"}' http://127.0.0.1:18998/mcp)"
+          echo "Unauthenticated /mcp status: $mcp_status"
+          test "$mcp_status" = 401
