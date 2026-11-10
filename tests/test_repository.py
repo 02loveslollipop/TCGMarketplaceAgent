@@ -35,3 +35,14 @@ def test_redaction_recursive_and_disabled_models(repo):
     assert redact({"password":"abc", "nested":[{"api_key":"bad", "message":"Bearer hello.abc"}]}) == {"password":"[REDACTED]", "nested":[{"api_key":"[REDACTED]", "message":"[REDACTED]"}]}
     repo.save_model("off", label="off", provider="openai", api_id="off", enabled=False)
     assert repo.models(enabled_only=True) == []
+
+
+def test_delete_conversation_removes_execution_graph_checkpoints(repo):
+    chat = repo.new_conversation("owner-cp", "Checkpoint cleanup")
+    execution = repo.new_execution(chat.id, "owner-cp", "m")
+    repo.graph_save(execution.id, {"checkpoint": "exec-thread"})
+    repo.graph_save(chat.id, {"checkpoint": "conv-thread"})
+    assert repo.graph_get(execution.id) == {"checkpoint": "exec-thread"}
+    repo.delete_conversation(chat.id, "owner-cp")
+    assert repo.graph_get(execution.id) is None
+    assert repo.graph_get(chat.id) is None

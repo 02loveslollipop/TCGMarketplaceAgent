@@ -91,10 +91,86 @@ class Planner:
         plan = await self.model.with_structured_output(AgentPlan, method="function_calling").ainvoke(
             messages + [HumanMessage(content="Return the resolved plan or one concise clarification question with selectable options. Sources must be URLs actually retrieved by the tools.")]
         )
+        await self._ensure_cards_loaded(plan)
         plan = self.validate(plan, preferences=preferences)
         if plan.explanation:
             event_writer()({"type": "thinking", "data": {"id": uuid.uuid4().hex, "status": "complete", "source": "approach_summary", "summary": plan.explanation[:6000]}})
         return plan
+
+    async def _ensure_cards_loaded(self, plan: AgentPlan) -> None:
+        if not plan.cards or not getattr(self.research, "get_cards", None):
+            return
+        cards_cache = getattr(self.research, "cards", None)
+        if cards_cache is None:
+            return
+        by_lang: dict[str, list[str]] = {"en": [], "ja": []}
+        default_ja = (plan.ruleset or "").lower() == "japan"
+        for card in plan.cards:
+            if (
+                card.card_id
+                and not card.card_id.startswith("unverified-")
+                and (
+                    card.card_id not in cards_cache
+                    or cards_cache[card.card_id].get("unknown")
+                )
+            ):
+                is_ja = default_ja or (card.language or "").lower() in {"ja", "japan", "japanese"}
+                by_lang["ja" if is_ja else "en"].append(card.card_id)
+        for lang, ids in by_lang.items():
+            if not ids:
+                continue
+            unique_ids = list(dict.fromkeys(ids))
+            try:
+                if lang == "ja":
+                    try:
+                        await self.research.get_cards(unique_ids, language="ja")
+                    except TypeError:
+                        await self.research.get_cards(unique_ids)
+                else:
+                    await self.research.get_cards(unique_ids)
+            except Exception:
+                pass
+
+    def _infer_ruleset_from_sets(self, cards: list[CardRequest], intl_sets: list[dict], jp_sets: list[dict]) -> str:
+        intl_legal_set_ids = {s["tcgdex_id"].lower() for s in intl_sets if s.get("tcgdex_id")}
+        intl_legal_set_codes = {s["set_code"].upper() for s in intl_sets if s.get("set_code")}
+        intl_legal_set_names = {normalized(s["name"]) for s in intl_sets if s.get("name")}
+        intl_legal_set_names_lower = {s["name"].lower() for s in intl_sets if s.get("name")}
+
+        jp_legal_set_ids = {s["tcgdex_id"].lower() for s in jp_sets if s.get("tcgdex_id")}
+        jp_legal_set_codes = {s["set_code"].upper() for s in jp_sets if s.get("set_code")}
+        jp_legal_set_names = {normalized(s["name"]) for s in jp_sets if s.get("name")}
+        jp_legal_set_names_lower = {s["name"].lower() for s in jp_sets if s.get("name")}
+
+        any_intl = False
+        any_jp = False
+        cards_cache = getattr(self.research, "cards", {}) or {}
+        for card in cards:
+            if card.basic_energy:
+                continue
+            meta = cards_cache.get(card.card_id, {})
+            set_obj = meta.get("set") or {}
+            card_set_id = (set_obj.get("id") or "").lower()
+            if not card_set_id and "-" in card.card_id:
+                card_set_id = card.card_id.split("-")[0].lower()
+            card_set_code = (set_obj.get("tcgOnline") or card.set_name or "").upper()
+            raw_set_name = (set_obj.get("name") or card.set_name or "").lower()
+            norm_set_name = normalized(raw_set_name)
+
+            if (
+                (card_set_id and card_set_id in intl_legal_set_ids)
+                or (card_set_code and card_set_code in intl_legal_set_codes)
+                or (raw_set_name and (raw_set_name in intl_legal_set_names_lower or norm_set_name in intl_legal_set_names))
+            ):
+                any_intl = True
+            if (
+                (card_set_id and card_set_id in jp_legal_set_ids)
+                or (card_set_code and card_set_code in jp_legal_set_codes)
+                or (raw_set_name and (raw_set_name in jp_legal_set_names_lower or norm_set_name in jp_legal_set_names))
+            ):
+                any_jp = True
+
+        return "japan" if (any_jp and not any_intl) else "international"
 
     def validate(self, plan: AgentPlan, preferences: dict | None = None) -> AgentPlan:
         if plan.question:
@@ -115,9 +191,13 @@ class Planner:
 
         for card in plan.cards:
             metadata = self.research.cards.get(card.card_id)
+            if metadata and (metadata.get("unverified") or metadata.get("unknown")):
+                metadata = None
             if not metadata:
                 # Try finding in cached cards by matching localId (ignoring zero-padding) and name
                 for mid, m in self.research.cards.items():
+                    if m.get("unverified") or m.get("unknown"):
+                        continue
                     if (
                         _norm_card_name(m.get("name", "")) == _norm_card_name(card.name)
                         and str(m.get("localId", "")).lstrip("0") == str(card.number).lstrip("0")
@@ -126,7 +206,7 @@ class Planner:
                         card.card_id = m.get("id", card.card_id)
                         break
 
-            if not metadata:
+            if not metadata or metadata.get("unverified"):
                 return AgentPlan(question=f"I could not verify {card.name} (#{card.number}) and its printing. Please provide its set/card number or another source.")
 
             # Compare name and number, normalizing leading zeros for numbers
@@ -184,13 +264,9 @@ class Planner:
             intl_sets = intl_cat.get("sets", [])
             jp_sets = jp_cat.get("sets", [])
 
-            intl_legal_set_ids = {s["tcgdex_id"].lower() for s in intl_sets if s.get("tcgdex_id")}
-            intl_legal_set_codes = {s["set_code"].upper() for s in intl_sets if s.get("set_code")}
-            intl_legal_set_names = {normalized(s["name"]) for s in intl_sets if s.get("name")}
-
-            jp_legal_set_ids = {s["tcgdex_id"].lower() for s in jp_sets if s.get("tcgdex_id")}
-            jp_legal_set_codes = {s["set_code"].upper() for s in jp_sets if s.get("set_code")}
-            jp_legal_set_names = {normalized(s["name"]) for s in jp_sets if s.get("name")}
+            sync_state = intl_cat.get("sync_state") or jp_cat.get("sync_state") or {}
+            intl_std_marks = set(sync_state.get("international_standard_marks") or ["H", "I", "J"])
+            jp_std_marks = set(sync_state.get("japan_standard_marks") or ["H", "I", "J"])
 
             conflict_cards = []
             for card in plan.cards:
@@ -202,31 +278,18 @@ class Planner:
                     banned_side = "International" if is_intl_banned else "Japan"
                     conflict_cards.append(f"'{card.name}' is banned in {banned_side}")
 
-                # b. Set/card existence or legality conflict
-                if not card.basic_energy and intl_sets and jp_sets:
+                # b. Regulation mark conflict in Standard format
+                if not card.basic_energy and target_fmt == "standard":
                     meta = self.research.cards.get(card.card_id, {})
-                    set_obj = meta.get("set") or {}
-                    card_set_id = (set_obj.get("id") or "").lower()
-                    if not card_set_id and "-" in card.card_id:
-                        card_set_id = card.card_id.split("-")[0].lower()
-                    card_set_code = (set_obj.get("tcgOnline") or card.set_name or "").upper()
-                    card_set_name = normalized(set_obj.get("name") or card.set_name or "")
-
-                    intl_set_legal = (
-                        (card_set_id in intl_legal_set_ids)
-                        or (card_set_code and card_set_code in intl_legal_set_codes)
-                        or (card_set_name and card_set_name in intl_legal_set_names)
-                    )
-                    jp_set_legal = (
-                        (card_set_id in jp_legal_set_ids)
-                        or (card_set_code and card_set_code in jp_legal_set_codes)
-                        or (card_set_name and card_set_name in jp_legal_set_names)
-                    )
-
-                    if intl_set_legal != jp_set_legal:
-                        legal_side = "International" if intl_set_legal else "Japan"
-                        set_disp = set_obj.get("name") or card.set_name or card_set_id.upper()
-                        conflict_cards.append(f"'{card.name}' from set '{set_disp}' is legal only in {legal_side}")
+                    reg_mark = meta.get("regulationMark")
+                    if reg_mark:
+                        in_intl = reg_mark in intl_std_marks
+                        in_jp = reg_mark in jp_std_marks
+                        if in_intl != in_jp:
+                            legal_side = "International" if in_intl else "Japan"
+                            conflict_cards.append(
+                                f"'{card.name}' (regulation mark '{reg_mark}') is legal only in {legal_side}"
+                            )
 
             if conflict_cards:
                 return AgentPlan(
@@ -237,7 +300,9 @@ class Planner:
                     options=["International (Play! Pokémon)", "Japan (Official Pokémon Card)"],
                 )
 
-        if not plan.ruleset:
+            plan.ruleset = self._infer_ruleset_from_sets(plan.cards, intl_sets, jp_sets)
+
+        if not plan.ruleset or plan.ruleset.lower() == "auto":
             plan.ruleset = pref_ruleset if pref_ruleset in {"international", "japan"} else "international"
 
         plan.sources = [
@@ -247,6 +312,7 @@ class Planner:
         return plan
 
     async def legality(self, plan: AgentPlan, knowledge: dict) -> Legality:
+        await self._ensure_cards_loaded(plan)
         issues = []
         if plan.is_deck:
             if sum(card.quantity for card in plan.cards) != 60:
@@ -258,20 +324,41 @@ class Planner:
             if any(quantity > 4 for quantity in counts.values()):
                 issues.append("More than four copies of a non-basic-energy card require a verified card-rule exception.")
 
-        ruleset = (plan.ruleset or "international").lower()
         fmt = (plan.format or "standard").lower()
+        plan_prefs = getattr(plan, "preferences", None) or {}
+        raw_ruleset = (plan_prefs.get("ruleset") or plan.ruleset or "auto").lower()
+        if raw_ruleset == "auto" and self.research.repository:
+            intl_cat = self.research.repository.query_legality_catalog(ruleset="international", format_=fmt, limit=1000)
+            jp_cat = self.research.repository.query_legality_catalog(ruleset="japan", format_=fmt, limit=1000)
+            ruleset = self._infer_ruleset_from_sets(plan.cards, intl_cat.get("sets", []), jp_cat.get("sets", []))
+        elif raw_ruleset in {"international", "japan"}:
+            ruleset = raw_ruleset
+        else:
+            ruleset = "international"
 
         # Deterministic PostgreSQL catalog validation
         if self.research.repository:
             catalog = self.research.repository.query_legality_catalog(ruleset=ruleset, format_=fmt, limit=1000)
             banned_map = {normalized(b["card_name"]): b for b in catalog.get("banned_cards", [])}
+            for b in catalog.get("banned_cards", []):
+                if b.get("card_name_ja"):
+                    banned_map[normalized(b["card_name_ja"])] = b
             banned_id_set = {b["card_id"] for b in catalog.get("banned_cards", []) if b.get("card_id")}
             sync_state = catalog.get("sync_state", {})
-            std_marks = set(sync_state.get(f"{ruleset}_standard_marks", ["H", "I", "J"]))
+            std_marks = set(sync_state.get(f"{ruleset}_standard_marks") or ["H", "I", "J"])
 
             legal_sets = catalog.get("sets", [])
             legal_tcgdex_ids = {s["tcgdex_id"].lower() for s in legal_sets if s.get("tcgdex_id")}
             legal_set_codes = {s["set_code"].upper() for s in legal_sets if s.get("set_code")}
+            legal_set_names = {
+                s["name"].lower()
+                for s in legal_sets
+                if s.get("name")
+                and (s.get("format") in {None, fmt})
+                and (s.get("ruleset") in {None, ruleset})
+                and s.get("legal", True)
+            }
+            legal_set_names_norm = {normalized(n) for n in legal_set_names}
 
             for card in plan.cards:
                 norm_cname = normalized(card.name)
@@ -286,11 +373,16 @@ class Planner:
                 if not card_set_id and "-" in card.card_id:
                     card_set_id = card.card_id.split("-")[0].lower()
                 card_set_code = (set_obj.get("tcgOnline") or card.set_name or "").upper()
+                card_set_name = (set_obj.get("name") or card.set_name or "").lower()
 
                 # Check set legality for Standard and Expanded
                 if not card.basic_energy and fmt in {"standard", "expanded"} and legal_sets:
-                    if card_set_id:
-                        is_legal_set = (card_set_id in legal_tcgdex_ids) or (card_set_code and card_set_code in legal_set_codes)
+                    if card_set_id or card_set_code or card_set_name:
+                        is_legal_set = (
+                            (card_set_id in legal_tcgdex_ids)
+                            or (card_set_code and card_set_code in legal_set_codes)
+                            or (card_set_name and (card_set_name in legal_set_names or normalized(card_set_name) in legal_set_names_norm))
+                        )
                         if not is_legal_set:
                             set_display = set_obj.get("name") or card.set_name or card_set_id.upper()
                             issues.append(f"Card '{card.name}' is from set '{set_display}', which is not legal in {ruleset.capitalize()} {fmt.capitalize()} format.")
@@ -298,7 +390,9 @@ class Planner:
                 # Check Standard regulation mark
                 if fmt == "standard" and not card.basic_energy:
                     reg_mark = meta.get("regulationMark")
-                    if reg_mark and reg_mark not in std_marks:
+                    if not reg_mark:
+                        issues.append(f"{card.name} ({card.card_id}) has no regulation mark and is not legal in Standard format")
+                    elif reg_mark not in std_marks:
                         issues.append(f"Card '{card.name}' has regulation mark '{reg_mark}', which is not in active {ruleset.capitalize()} Standard marks ({', '.join(sorted(std_marks))}).")
 
         official = knowledge.get("official_sources", [])

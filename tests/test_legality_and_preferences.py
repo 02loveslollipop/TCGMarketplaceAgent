@@ -523,22 +523,64 @@ async def test_planner_validate_energy_name_normalization_and_conflict(repo):
     assert validated.cards[0].name == "Basic Fighting Energy"
     assert validated.cards[0].basic_energy is True
 
-    # Test auto ruleset disambiguation on set conflict
+    # Test auto ruleset resolves Japanese set without false-positive conflict when marks match
     sets = [
         {"id": "japan:m1", "ruleset": "japan", "tcgdex_id": "m1", "set_code": "M1", "name": "Mega Rayquaza ex", "series": "MEGA", "release_date": "2025-04-01", "legal_standard": True, "legal_expanded": True, "card_count": 120},
         {"id": "international:sv08", "ruleset": "international", "tcgdex_id": "sv08", "set_code": "SSP", "name": "Surging Sparks", "series": "Scarlet & Violet", "release_date": "2024-11-08", "legal_standard": True, "legal_expanded": True, "card_count": 252},
     ]
-    repo.replace_legality_catalog(sets=sets, bans=[], sync_state={"status": "synced", "last_refreshed_at": utcnow()})
+    repo.replace_legality_catalog(
+        sets=sets,
+        bans=[],
+        sync_state={
+            "status": "synced",
+            "last_refreshed_at": utcnow(),
+            "international_standard_marks": ["H", "I", "J"],
+            "japan_standard_marks": ["H", "I", "J"],
+        },
+    )
 
     research.cards["m1-001"] = {
         "id": "m1-001",
         "name": "Mega Rayquaza ex",
         "localId": "001",
         "category": "Pokemon",
+        "regulationMark": "I",
         "set": {"id": "m1", "name": "Mega Rayquaza ex", "tcgOnline": "M1"},
         "legal": {"standard": True, "expanded": True},
     }
 
+    jp_plan = AgentPlan(
+        format="standard",
+        ruleset="international",
+        cards=[
+            CardRequest(
+                card_id="m1-001",
+                name="Mega Rayquaza ex",
+                quantity=4,
+                set_name="Mega Rayquaza ex",
+                number="001",
+                condition="Near Mint",
+                language="Japanese",
+                printing="Normal",
+            )
+        ],
+    )
+    validated_jp = planner.validate(jp_plan, preferences={"ruleset": "auto", "format": "standard"})
+    assert validated_jp.question is None
+    assert validated_jp.ruleset == "japan"
+
+    # Test auto ruleset disambiguation on genuine regulation mark conflict across rulesets
+    repo.replace_legality_catalog(
+        sets=sets,
+        bans=[],
+        sync_state={
+            "status": "synced",
+            "last_refreshed_at": utcnow(),
+            "international_standard_marks": ["H", "I"],
+            "japan_standard_marks": ["H", "I", "J"],
+        },
+    )
+    research.cards["m1-001"]["regulationMark"] = "J"
     conflict_plan = AgentPlan(
         format="standard",
         ruleset="international",
@@ -562,4 +604,156 @@ async def test_planner_validate_energy_name_normalization_and_conflict(repo):
     assert "Japan (Official Pokémon Card)" in validated_conflict.options
 
 
+@pytest.mark.asyncio
+async def test_ensure_cards_loaded_and_missing_regulation_mark_in_standard(repo):
+    from shared.contracts import AgentPlan, CardRequest
 
+    research = Research(repo)
+    planner = Planner(model=MagicMock(), research=research)
+
+    sets = [
+        {"id": "international:sv08", "ruleset": "international", "tcgdex_id": "sv08", "set_code": "SSP", "name": "Surging Sparks", "series": "Scarlet & Violet", "release_date": "2024-11-08", "legal_standard": True, "legal_expanded": True, "card_count": 252},
+    ]
+    repo.replace_legality_catalog(
+        sets=sets,
+        bans=[],
+        sync_state={
+            "status": "synced",
+            "international_standard_marks": ["H", "I", "J"],
+            "japan_standard_marks": ["H", "I", "J"],
+        },
+    )
+
+    async def fake_get_cards(card_ids, language="en"):
+        for cid in card_ids:
+            if cid == "sv08-001":
+                research.cards[cid] = {
+                    "id": "sv08-001",
+                    "name": "Exeggcute",
+                    "localId": "1",
+                    "category": "Pokemon",
+                    "regulationMark": None,
+                    "set": {"id": "sv08", "name": "Surging Sparks", "tcgOnline": "SSP"},
+                }
+        return [research.cards[cid] for cid in card_ids if cid in research.cards]
+
+    with patch.object(research, "get_cards", side_effect=fake_get_cards) as mock_get_cards:
+        plan = AgentPlan(
+            format="standard",
+            ruleset="international",
+            cards=[
+                CardRequest(
+                    card_id="sv08-001",
+                    name="Exeggcute",
+                    quantity=4,
+                    set_name="Surging Sparks",
+                    number="1",
+                    condition="Near Mint",
+                    language="English",
+                    printing="Normal",
+                )
+            ],
+        )
+        # research.cards starts empty (simulating resumed execution on a fresh Research instance)
+        assert "sv08-001" not in research.cards
+        leg = await planner.legality(plan, knowledge={})
+        assert mock_get_cards.called
+        assert "sv08-001" in research.cards
+        assert any("Exeggcute (sv08-001) has no regulation mark and is not legal in Standard format" in i for i in leg.issues)
+
+
+@pytest.mark.asyncio
+async def test_ddg_mcp_http_401_raises_runtime_error_without_fallback():
+    import httpx
+    research = Research(mcp_url="http://ddg-mcp:8000/mcp", mcp_auth_token="bad-token")
+
+    req = httpx.Request("POST", "http://ddg-mcp:8000/mcp")
+    resp = httpx.Response(401, request=req)
+    status_err = httpx.HTTPStatusError("401 Unauthorized", request=req, response=resp)
+
+    with patch("mcp.client.streamable_http.streamable_http_client", side_effect=ExceptionGroup("mcp group", [status_err])):
+        with pytest.raises(RuntimeError, match="ddg_mcp request failed with HTTP 401"):
+            await research._call_ddg_mcp_tool("search", {"query": "test"})
+
+
+@pytest.mark.asyncio
+async def test_ddg_mcp_rejects_private_and_non_https_urls_and_redirects():
+    import httpx
+    import services.ddg_mcp.main as ddg_main
+
+    for bad_url in ("http://example.com/page", "https://127.0.0.1/secret", "https://localhost/admin"):
+        with pytest.raises(ValueError):
+            await ddg_main.ddg_server.fetcher._guard_url(bad_url)
+        res = await ddg_main.ddg_server.fetcher.fetch_and_parse(bad_url, None)
+        assert res.startswith("Error: Refusing to fetch")
+
+    # Verify HTTP redirect to private/loopback target is blocked by _guard_url on redirect hop
+    redirect_resp = httpx.Response(
+        302,
+        headers={"location": "https://127.0.0.1/internal"},
+        request=httpx.Request("GET", "https://limitlesstcg.com/redirect"),
+    )
+    with patch("httpx.AsyncClient.get", return_value=redirect_resp):
+        with pytest.raises(ddg_main.PublicHttpsBlockedError):
+            await ddg_main.ddg_server.fetcher._fetch_httpx("https://limitlesstcg.com/redirect")
+
+
+@pytest.mark.asyncio
+async def test_research_card_rest_fallback_without_recursion_and_ja_hydration():
+    from shared.contracts import AgentPlan, CardRequest
+
+    research = Research()
+    gql_resp = MagicMock()
+    gql_resp.json.return_value = {"data": {"c0": None}}
+    gql_resp.raise_for_status = MagicMock()
+
+    rest_resp = MagicMock()
+    rest_resp.json.return_value = {
+        "id": "sv8a-001",
+        "localId": "001",
+        "name": "リーフィア",
+        "category": "Pokemon",
+        "regulationMark": "H",
+        "set": {"id": "sv8a", "name": "テラスタルフェスex", "tcgOnline": "SV8A"},
+        "pricing": {"cardmarket": {}},
+    }
+    rest_resp.raise_for_status = MagicMock()
+
+    with patch("httpx.AsyncClient.post", return_value=gql_resp) as mock_post, patch(
+        "httpx.AsyncClient.get", return_value=rest_resp
+    ) as mock_get:
+        card_data = await research.card("sv8a-001", language="ja")
+        assert card_data["id"] == "sv8a-001"
+        assert "pricing" not in card_data
+        # GraphQL called once, REST called once (no recursion)
+        assert mock_post.call_count == 1
+        assert mock_get.call_count == 1
+
+    # Verify _ensure_cards_loaded passes language="ja" for Japanese cards
+    research_ja = Research()
+    planner = Planner(model=MagicMock(), research=research_ja)
+    observed_langs = []
+
+    async def capture_get_cards(ids, language="en"):
+        observed_langs.append((ids, language))
+        return []
+
+    with patch.object(research_ja, "get_cards", side_effect=capture_get_cards):
+        await planner._ensure_cards_loaded(
+            AgentPlan(
+                format="standard",
+                cards=[
+                    CardRequest(
+                        card_id="sv8a-001",
+                        name="リーフィア",
+                        quantity=4,
+                        set_name="テラスタルフェスex",
+                        number="001",
+                        condition="Near Mint",
+                        language="Japanese",
+                        printing="Normal",
+                    )
+                ],
+            )
+        )
+    assert observed_langs == [(["sv8a-001"], "ja")]

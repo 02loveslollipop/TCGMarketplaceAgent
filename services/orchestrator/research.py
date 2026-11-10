@@ -14,6 +14,7 @@ from langchain_core.tools import tool
 
 from shared.contracts import Source, utcnow
 from shared.repository import Repository
+from shared.url_security import public_https
 from services.orchestrator.legality_sync import (
     POKEMON_CARD_JP_URL,
     should_refresh_legality,
@@ -52,13 +53,20 @@ class TextParser(HTMLParser):
             self.parts.append(data.strip())
 
 
-def public_https(url: str):
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.hostname or parsed.username or parsed.port not in {None, 443}:
-        raise ValueError("Only public HTTPS sources on port 443 are allowed.")
-    addresses = socket.getaddrinfo(parsed.hostname, 443)
-    if not addresses or any(not ipaddress.ip_address(address[4][0]).is_global for address in addresses):
-        raise ValueError("Private or reserved network sources are unavailable.")
+def _iter_exceptions(exc: BaseException, seen: set[int] | None = None):
+    if seen is None:
+        seen = set()
+    if id(exc) in seen:
+        return
+    seen.add(id(exc))
+    yield exc
+    if isinstance(exc, BaseExceptionGroup):
+        for sub in exc.exceptions:
+            yield from _iter_exceptions(sub, seen)
+    if exc.__cause__ is not None:
+        yield from _iter_exceptions(exc.__cause__, seen)
+    if exc.__context__ is not None:
+        yield from _iter_exceptions(exc.__context__, seen)
 
 
 class Research:
@@ -97,10 +105,23 @@ class Research:
                         if getattr(res, "is_error", False) or getattr(res, "isError", False):
                             raise RuntimeError("\n".join(getattr(c, "text", "") for c in res.content))
                         return "\n".join(getattr(c, "text", "") for c in res.content if getattr(c, "text", None))
-            except Exception as exc:
-                if isinstance(exc, RuntimeError) or (hasattr(exc, "subgroup") and exc.subgroup(RuntimeError) is not None):
-                    raise
-                # On transport/connection errors when local ddg-mcp container is not running, fall through to in-process MCP server
+            except BaseException as exc:
+                for item in _iter_exceptions(exc):
+                    if isinstance(item, httpx.HTTPStatusError):
+                        raise RuntimeError(f"ddg_mcp request failed with HTTP {item.response.status_code}") from exc
+                for item in _iter_exceptions(exc):
+                    if isinstance(item, RuntimeError) and not any(
+                        isinstance(sub, (httpx.ConnectError, httpx.ConnectTimeout))
+                        for sub in _iter_exceptions(item)
+                    ):
+                        raise item
+                is_local_connect_error = any(
+                    isinstance(item, (httpx.ConnectError, httpx.ConnectTimeout))
+                    for item in _iter_exceptions(exc)
+                )
+                if not is_local_connect_error or os.getenv("DYNO"):
+                    raise RuntimeError(f"ddg_mcp request failed: {exc}") from exc
+                # On local transport/connection errors in dev/test mode when ddg-mcp container is not running, fall through to in-process MCP server
 
         async with Client(ddg_main.ddg_server.mcp) as client:
             res = await client.call_tool(tool_name, arguments)
@@ -304,13 +325,14 @@ class Research:
                 response.raise_for_status()
                 return response.json()[:15]
 
-    async def card(self, card_id: str, language: str = "en") -> dict:
+    async def card(self, card_id: str, language: str = "en", *, _from_batch: bool = False) -> dict:
         """Fetch full card details by ID, checking cache first."""
-        if card_id in self.cards:
+        if card_id in self.cards and not self.cards[card_id].get("unknown"):
             return self.cards[card_id]
-        results = await self.get_cards([card_id], language=language)
-        if results and results[0].get("id") == card_id:
-            return results[0]
+        if not _from_batch:
+            results = await self.get_cards([card_id], language=language)
+            if results and results[0].get("id") == card_id and not results[0].get("unknown"):
+                return results[0]
         # Direct REST fallback
         self.network_budget()
         lang = "ja" if language.lower() in {"ja", "japan", "japanese"} else "en"
@@ -395,10 +417,13 @@ class Research:
                     async with gate:
                         try:
                             try:
-                                dt = await self.card(c_id, language=language)
+                                dt = await self.card(c_id, language=language, _from_batch=True)
                             except TypeError:
-                                dt = await self.card(c_id)
-                            if dt:
+                                try:
+                                    dt = await self.card(c_id, language=language)
+                                except TypeError:
+                                    dt = await self.card(c_id)
+                            if dt and not dt.get("unknown"):
                                 self.cards[c_id] = dt
                         except Exception:
                             pass
@@ -547,7 +572,7 @@ class Research:
             matched_meta = resolved_map.get(entry["candidate_id"])
             if not matched_meta:
                 cached_candidate = self.cards.get(entry["candidate_id"])
-                if cached_candidate and not cached_candidate.get("unknown"):
+                if cached_candidate and not cached_candidate.get("unknown") and not cached_candidate.get("unverified"):
                     matched_meta = cached_candidate
             if not matched_meta:
                 # Try padded / unpadded match
@@ -568,19 +593,20 @@ class Research:
                 except Exception:
                     pass
             if not matched_meta:
+                unverified_id = f"unverified-{entry['set_code']}-{entry['number']}"
                 matched_meta = {
-                    "id": entry["candidate_id"],
+                    "id": unverified_id,
                     "name": entry["name"],
                     "localId": entry["number"],
                     "category": "Energy" if entry["basic_energy"] else "Pokemon",
                     "energyType": "Normal" if entry["basic_energy"] else None,
                     "set": {"id": entry["tcgdex_set"], "name": entry["set_code"], "tcgOnline": entry["set_code"]},
-                    "legal": {"standard": True, "expanded": True},
+                    "legal": {"standard": False, "expanded": False},
+                    "unverified": True,
                 }
-                self.cards[entry["candidate_id"]] = matched_meta
 
-            final_cards.append({
-                "card_id": matched_meta.get("id") if matched_meta else entry["candidate_id"],
+            card_item = {
+                "card_id": matched_meta.get("id") if matched_meta else f"unverified-{entry['set_code']}-{entry['number']}",
                 "name": matched_meta.get("name") if matched_meta else entry["name"],
                 "quantity": entry["quantity"],
                 "set_code": entry["set_code"],
@@ -588,8 +614,11 @@ class Research:
                 "number": str(matched_meta.get("localId")) if matched_meta else entry["number"],
                 "image_url": matched_meta.get("image") if matched_meta else None,
                 "regulation_mark": matched_meta.get("regulationMark") if matched_meta else None,
-                "legal": matched_meta.get("legal") if matched_meta else {},
-            })
+                "legal": matched_meta.get("legal") if matched_meta else {"standard": False, "expanded": False},
+            }
+            if matched_meta and matched_meta.get("unverified"):
+                card_item["unverified"] = True
+            final_cards.append(card_item)
 
         return {
             "source_url": url,

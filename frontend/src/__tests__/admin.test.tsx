@@ -97,3 +97,50 @@ it('filters the model collection and provides recovery from zero matches',async(
   await user.click(screen.getByRole('button',{name:'Clear filter'}));
   expect(screen.getByRole('button',{name:'Edit GPT 6 luna'})).toBeInTheDocument();
 });
+
+it('maps execution statuses consistently for table and modal status indicators and isolates row loading state',async()=>{
+  const {AdminActivity, statusIndicatorType} = await import('../AdminActivity');
+  expect(statusIndicatorType('complete')).toBe('success');
+  expect(statusIndicatorType('running')).toBe('loading');
+  expect(statusIndicatorType('failed')).toBe('error');
+  expect(statusIndicatorType('cancelled')).toBe('stopped');
+  expect(statusIndicatorType('waiting')).toBe('info');
+
+  let resolveDetail!: (res: Response) => void;
+  const detailPromise = new Promise<Response>((resolve) => { resolveDetail = resolve; });
+  vi.stubGlobal('fetch', vi.fn((path: string) => {
+    if (path.includes('/api/admin/activity/exec-1')) return detailPromise;
+    if (path.includes('/api/admin/activity')) {
+      return Promise.resolve(json([
+        {id: 'exec-11111111', user_id: 'u1', conversation_id: 'c1', conversation_title: 'First Deck', model_id: 'gpt-6-luna', status: 'failed', created_at: '2026-11-10T00:00:00Z', updated_at: '2026-11-10T00:00:00Z'},
+        {id: 'exec-22222222', user_id: 'u1', conversation_id: 'c2', conversation_title: 'Second Deck', model_id: 'gpt-6-luna', status: 'complete', created_at: '2026-11-10T00:00:00Z', updated_at: '2026-11-10T00:00:00Z'},
+      ]));
+    }
+    return Promise.resolve(json({status: 'synced', last_refreshed_at: null, next_refresh_at: null, sets_count: 10, banned_count: 2}));
+  }));
+
+  const user = userEvent.setup();
+  render(<AdminActivity token="admin-token" />);
+  await screen.findByText('First Deck');
+  const buttons = screen.getAllByRole('button', {name: /View reasoning & trace/i});
+  expect(buttons).toHaveLength(2);
+  await user.click(buttons[0]);
+  expect(buttons[0]).toHaveAttribute('aria-disabled', 'true');
+  expect(buttons[1]).not.toHaveAttribute('aria-disabled', 'true');
+
+  resolveDetail(json({
+    id: 'exec-11111111',
+    user_id: 'u1',
+    conversation_id: 'c1',
+    conversation_title: 'First Deck',
+    model_id: 'gpt-6-luna',
+    status: 'failed',
+    created_at: '2026-11-10T00:00:00Z',
+    updated_at: '2026-11-10T00:00:00Z',
+    checkpoint: {},
+    reasoning_summary: 'Failed during quote step.',
+    events: [],
+    logs: [],
+  }));
+  expect(await screen.findByRole('dialog', {name: /Execution Details — First Deck/i})).toBeInTheDocument();
+});

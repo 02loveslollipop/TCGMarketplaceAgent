@@ -20,6 +20,23 @@ interface AdminActivityProps {
   token: string;
 }
 
+export function statusIndicatorType(
+  status: string
+): 'success' | 'loading' | 'error' | 'stopped' | 'info' {
+  switch (status) {
+    case 'complete':
+      return 'success';
+    case 'running':
+      return 'loading';
+    case 'failed':
+      return 'error';
+    case 'cancelled':
+      return 'stopped';
+    default:
+      return 'info';
+  }
+}
+
 export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
   const [executions, setExecutions] = useState<AdminExecutionSummary[]>([]);
   const [legality, setLegality] = useState<LegalityStatus | null>(null);
@@ -29,7 +46,7 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
   const [filterText, setFilterText] = useState('');
   const [currentPage, setCurrentPage] = useState(1);
   const [selectedExecution, setSelectedExecution] = useState<AdminExecutionDetail | null>(null);
-  const [loadingDetail, setLoadingDetail] = useState(false);
+  const [loadingDetailId, setLoadingDetailId] = useState<string | null>(null);
 
   const loadData = async () => {
     setLoading(true);
@@ -66,14 +83,14 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
   };
 
   const handleViewDetail = async (executionId: string) => {
-    setLoadingDetail(true);
+    setLoadingDetailId(executionId);
     try {
       const detail = await api<AdminExecutionDetail>(`/api/admin/activity/${executionId}`, token);
       setSelectedExecution(detail);
     } catch (err: any) {
       setError(err.message || 'Failed to load execution detail.');
     } finally {
-      setLoadingDetail(false);
+      setLoadingDetailId(null);
     }
   };
 
@@ -205,17 +222,7 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
             id: 'status',
             header: 'Status',
             cell: (e) => (
-              <StatusIndicator
-                type={
-                  e.status === 'complete'
-                    ? 'success'
-                    : e.status === 'running'
-                    ? 'loading'
-                    : e.status === 'failed'
-                    ? 'error'
-                    : 'stopped'
-                }
-              >
+              <StatusIndicator type={statusIndicatorType(e.status)}>
                 {e.status}
               </StatusIndicator>
             ),
@@ -231,7 +238,7 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
             cell: (e) => (
               <Button
                 variant="inline-link"
-                loading={loadingDetail}
+                loading={loadingDetailId === e.id}
                 onClick={() => handleViewDetail(e.id)}
               >
                 View reasoning &amp; trace
@@ -262,9 +269,7 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
               </div>
               <div>
                 <Box color="text-body-secondary">Status</Box>
-                <StatusIndicator
-                  type={selectedExecution.status === 'complete' ? 'success' : 'info'}
-                >
+                <StatusIndicator type={statusIndicatorType(selectedExecution.status)}>
                   {selectedExecution.status}
                 </StatusIndicator>
               </div>

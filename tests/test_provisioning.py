@@ -22,3 +22,20 @@ def test_offer_rejects_negative_price_and_unknown_fields():
         Offer(id="x", name="x", supplier="TCGplayer", price=-1, currency="USD", price_kind="listing", source={"url":"https://example.com", "title":"test"})
     with pytest.raises(ValidationError):
         Offer(id="x", name="x", supplier="TCGplayer", price=1, currency="USD", price_kind="listing", source={"url":"https://example.com", "title":"test"}, executable_markup="alert(1)")
+
+
+def test_runtime_files_autogenerates_and_preserves_mcp_auth_token(tmp_path, monkeypatch):
+    from dotenv import dotenv_values
+    from scripts.provision import runtime_files
+
+    monkeypatch.chdir(tmp_path)
+    passwords = dict.fromkeys(SERVICE_TABLES, "test-only-password")
+    runtime_files({}, passwords, {"host": "localhost", "port": "5432", "dbname": "testdb"})
+    orch_env = dotenv_values(tmp_path / ".runtime" / "orchestrator.env")
+    first_token = orch_env.get("MCP_AUTH_TOKEN")
+    assert first_token and len(first_token) >= 32
+
+    # Second run without MCP_AUTH_TOKEN in .env preserves the existing generated token
+    runtime_files({}, passwords, {"host": "localhost", "port": "5432", "dbname": "testdb"})
+    orch_env_second = dotenv_values(tmp_path / ".runtime" / "orchestrator.env")
+    assert orch_env_second.get("MCP_AUTH_TOKEN") == first_token

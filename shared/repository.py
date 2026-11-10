@@ -204,8 +204,10 @@ class Repository:
             if exec_ids:
                 session.execute(delete(Event).where(Event.execution_id.in_(exec_ids)))
                 session.execute(delete(Execution).where(Execution.id.in_(exec_ids)))
+                session.execute(delete(GraphCheckpoint).where(GraphCheckpoint.thread_id.in_([*exec_ids, conversation_id])))
+            else:
+                session.execute(delete(GraphCheckpoint).where(GraphCheckpoint.thread_id == conversation_id))
             session.execute(delete(Message).where(Message.conversation_id == conversation_id))
-            session.execute(delete(GraphCheckpoint).where(GraphCheckpoint.thread_id == conversation_id))
             session.delete(conv)
 
     def user_preferences(self, user_id: str) -> dict:

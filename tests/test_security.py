@@ -112,3 +112,38 @@ def test_local_password_only_allows_unenrolled_accounts_and_preserves_rate_limit
     assert client.post("/token", data={"username":"unenrolled", "password":"test-password-long"}).status_code == 429
     assert not repo.user(user_id=user.id).totp_secret
     assert not repo.webauthn_credentials(user.id)
+
+
+def test_client_ip_and_guard_forwarded_headers_and_eviction(monkeypatch):
+    from collections import defaultdict, deque
+    from starlette.requests import Request
+    from fastapi import HTTPException
+    from services.auth.app import client_ip, guard
+
+    def make_req(headers: dict[str, str]):
+        raw_headers = [(k.lower().encode(), v.encode()) for k, v in headers.items()]
+        return Request({"type": "http", "headers": raw_headers, "client": ("10.0.0.1", 12345)})
+
+    req_xff = make_req({"X-Forwarded-For": "203.0.113.1, 198.51.100.42"})
+    assert client_ip(req_xff) == "198.51.100.42"
+
+    req_cf = make_req({"CF-Connecting-IP": "192.0.2.99"})
+    assert client_ip(req_cf) == "192.0.2.99"
+
+    store = defaultdict(deque)
+    t = 1000.0
+    monkeypatch.setattr("services.auth.app.time.monotonic", lambda: t)
+    guard(req_xff, "login", store)
+    assert "login:198.51.100.42" in store
+
+    # Advance past 60s window and trigger guard with another IP; stale key should be evicted
+    t = 1065.0
+    guard(req_cf, "login", store)
+    assert "login:198.51.100.42" not in store
+    assert "login:192.0.2.99" in store
+
+    for _ in range(9):
+        guard(req_cf, "login", store)
+    with pytest.raises(HTTPException) as exc_info:
+        guard(req_cf, "login", store)
+    assert exc_info.value.status_code == 429

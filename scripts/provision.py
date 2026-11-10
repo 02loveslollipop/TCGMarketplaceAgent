@@ -96,7 +96,14 @@ def runtime_files(values: dict, passwords: dict, admin_info: dict):
             if "\n" in ddg_mcp_url or "\r" in ddg_mcp_url:
                 raise ValueError("Invalid multiline value for DDG_MCP_URL")
             lines.append(f"DDG_MCP_URL={ddg_mcp_url}")
-            mcp_auth_token = str(values.get("MCP_AUTH_TOKEN") or "")
+            existing_orch = dotenv_values(folder / "orchestrator.env") if (folder / "orchestrator.env").exists() else {}
+            mcp_auth_token = str(
+                values.get("MCP_AUTH_TOKEN")
+                or existing_orch.get("MCP_AUTH_TOKEN")
+                or secrets.token_urlsafe(32)
+            ).strip()
+            if not mcp_auth_token:
+                mcp_auth_token = secrets.token_urlsafe(32)
             if "\n" in mcp_auth_token or "\r" in mcp_auth_token:
                 raise ValueError("Invalid multiline value for MCP_AUTH_TOKEN")
             lines.append(f"MCP_AUTH_TOKEN={mcp_auth_token}")

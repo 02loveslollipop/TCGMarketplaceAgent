@@ -28,6 +28,10 @@ services:
     command: [uvicorn, services.ddg_mcp.main:app, --host, 0.0.0.0, --port, '8000', --no-access-log, --no-proxy-headers]
     environment:
       MCP_AUTH_TOKEN: "${MCP_AUTH_TOKEN:-}"
+      DDG_SEARCH_BACKEND: ${DDG_SEARCH_BACKEND:-auto}
+      DDG_FETCH_BACKEND: ${DDG_FETCH_BACKEND:-auto}
+      DDG_SAFE_SEARCH: ${DDG_SAFE_SEARCH:-MODERATE}
+      DDG_REF_URL_THRESHOLD: ${DDG_REF_URL_THRESHOLD:-100}
     networks: [private, outbound]
     read_only: true
     tmpfs: [/tmp]

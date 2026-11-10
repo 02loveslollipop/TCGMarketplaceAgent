@@ -56,10 +56,62 @@ class RecoveryProof(PasswordChallenge):
     code: str = Field(min_length=1,max_length=100)
 
 
+def client_ip(request: Request) -> str:
+    forwarded = request.headers.get("x-forwarded-for", "").strip()
+    if forwarded:
+        hops = [part.strip() for part in forwarded.split(",") if part.strip()]
+        if hops:
+            return hops[-1]
+    cf_ip = request.headers.get("cf-connecting-ip", "").strip()
+    if cf_ip:
+        return cf_ip
+    return request.client.host if request.client and request.client.host else "local"
+
+
+def guard(
+    request: Request,
+    scope: str = "login",
+    attempts: dict | None = None,
+    *,
+    window: float = 60.0,
+    limit: int = 10,
+) -> None:
+    store = attempts if attempts is not None else getattr(getattr(request, "app", None), "state", None) and getattr(request.app.state, "attempts", None)
+    if store is None:
+        store = _MODULE_ATTEMPTS
+    now = time.monotonic()
+    stale_keys = []
+    for k, q in list(store.items()):
+        while q and now - q[0] > window:
+            q.popleft()
+        if not q:
+            stale_keys.append(k)
+    for k in stale_keys:
+        store.pop(k, None)
+    if len(store) > 1024:
+        oldest_keys = sorted(store.keys(), key=lambda k: store[k][-1] if store[k] else 0.0)[: len(store) - 1024]
+        for k in oldest_keys:
+            store.pop(k, None)
+
+    ip = client_ip(request)
+    key = f"{scope}:{ip}" if scope else ip
+    queue = store.setdefault(key, deque())
+    while queue and now - queue[0] > window:
+        queue.popleft()
+    if len(queue) >= limit:
+        raise HTTPException(429, "Too many login attempts; wait one minute.")
+    queue.append(now)
+
+
+_MODULE_ATTEMPTS: dict[str, deque] = defaultdict(deque)
+
+
 def create_app(repo, security, webauthn=None):
     app = application("Pokemon authentication",credentialed=True)
     webauthn=webauthn or WebAuthn(security)
     attempts = defaultdict(deque)
+    app.state.attempts = attempts
+    app.state.guard = lambda request, scope="login": guard(request, scope, attempts)
 
     def current(token: str = Depends(bearer)):
         try:
@@ -116,14 +168,7 @@ def create_app(repo, security, webauthn=None):
 
     @app.post("/token")
     def login(request: Request, form: OAuth2PasswordRequestForm = Depends()):
-        key = request.client.host if request.client else "local"
-        now = time.monotonic()
-        queue = attempts[key]
-        while queue and now - queue[0] > 60:
-            queue.popleft()
-        if len(queue) >= 10:
-            raise HTTPException(429, "Too many login attempts; wait one minute.")
-        queue.append(now)
+        guard(request, "login", attempts)
         try:
             return security.login(form.username, form.password)
         except AuthenticationError as error:
