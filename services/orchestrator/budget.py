@@ -38,11 +38,27 @@ def normalize_condition(val: str | None) -> str:
     return CONDITIONS.get(text, text)
 
 
+PRINTINGS = {
+    "non-holo": "normal",
+    "non holo": "normal",
+    "nonholo": "normal",
+    "normal": "normal",
+    "holo": "holofoil",
+    "holofoil": "holofoil",
+    "foil": "holofoil",
+    "rev holo": "reverse holofoil",
+    "rev-holo": "reverse holofoil",
+    "reverse holo": "reverse holofoil",
+    "reverse holofoil": "reverse holofoil",
+    "reverse foil": "reverse holofoil",
+}
+
+
 def normalize_printing(val: str | None) -> str:
     text = normalized(val)
     if text in {"", "any", "not applicable", "na", "n a", "none", "unverified", "default", "standard", "expanded", "regular", "standard printing"} or text.startswith("not applicable"):
         return "any"
-    return text
+    return PRINTINGS.get(text, text)
 
 
 def request_identity(card: CardRequest) -> tuple[str, ...]:

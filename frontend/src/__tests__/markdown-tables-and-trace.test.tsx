@@ -77,3 +77,36 @@ it('renders tool calls in ThinkingTrace with tool name, duration, and verified s
   expect(sourceLink).toBeInTheDocument();
   expect(sourceLink).toHaveAttribute('href', 'https://www.tcgplayer.com/product/654415');
 });
+
+it('ThinkingTrace displays Completed thinking when a tool has an error but thinking completed', () => {
+  const entries: ChatEntry[] = [
+    {
+      id: 'tool-err',
+      type: 'tool',
+      created_at: new Date().toISOString(),
+      data: {
+        id: 't-err',
+        name: 'quote_supplier',
+        status: 'error',
+        input: { supplier: 'Cardmarket' },
+        sources: [],
+      },
+    },
+    {
+      id: 'think-ok',
+      type: 'thinking',
+      created_at: new Date().toISOString(),
+      data: {
+        id: 'th-ok',
+        status: 'complete',
+        source: 'approach_summary',
+        summary: 'Finished finding alternative quotations.',
+      },
+    },
+  ];
+
+  render(<ThinkingTrace entries={entries} active={false} />);
+  expect(screen.getByTestId('thinking-trace')).toBeInTheDocument();
+  expect(screen.getByText('Completed thinking')).toBeInTheDocument();
+  expect(screen.queryByText('Thinking interrupted')).toBeNull();
+});

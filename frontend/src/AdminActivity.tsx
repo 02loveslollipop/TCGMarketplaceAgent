@@ -162,16 +162,18 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
       body.conversation_id = playgroundThreadId;
     }
 
+    let createdExecId = playgroundExecutionId;
     try {
       await stream('/api/chat/executions', token, body, (ev: AgentEvent) => {
         if (ev.type === 'execution') {
+          createdExecId = ev.data.id;
           setPlaygroundExecutionId(ev.data.id);
           setPlaygroundThreadId(ev.data.conversation_id);
         }
       });
       await loadData();
-      if (playgroundExecutionId) {
-        await handleViewDetail(playgroundExecutionId);
+      if (createdExecId) {
+        await handleViewDetail(createdExecId);
       }
     } catch (err: any) {
       setPlaygroundError(err.message || 'Execution error');
@@ -237,6 +239,34 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
     conversation_id: convId,
     ...data,
   }));
+
+  const activeConversationId = playgroundThreadId || selectedExecution?.conversation_id;
+  const threadExecutions = executions.filter(
+    (e) => activeConversationId && e.conversation_id === activeConversationId
+  );
+
+  const transcriptGroups: Array<{
+    type: 'user' | 'trace' | 'single';
+    message?: any;
+    items?: any[];
+  }> = [];
+  let currentTrace: any[] = [];
+  for (const m of selectedExecution?.messages || []) {
+    const isAssistant = m.role === 'assistant';
+    const cType = m.content?.type;
+    if (isAssistant && (cType === 'thinking' || cType === 'tool')) {
+      currentTrace.push(m);
+    } else {
+      if (currentTrace.length > 0) {
+        transcriptGroups.push({ type: 'trace', items: [...currentTrace] });
+        currentTrace = [];
+      }
+      transcriptGroups.push({ type: m.role === 'user' ? 'user' : 'single', message: m });
+    }
+  }
+  if (currentTrace.length > 0) {
+    transcriptGroups.push({ type: 'trace', items: [...currentTrace] });
+  }
 
   return (
     <SpaceBetween size="l">
@@ -483,16 +513,40 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
                     : 'New session'
                 }
                 actions={
-                  <Select
-                    selectedOption={
-                      selectedModel
-                        ? { value: selectedModel, label: models.find((m) => m.id === selectedModel)?.label || selectedModel }
-                        : null
-                    }
-                    onChange={({ detail }) => setSelectedModel(detail.selectedOption.value || '')}
-                    options={models.map((m) => ({ value: m.id, label: m.label }))}
-                    placeholder="Select model"
-                  />
+                  <SpaceBetween direction="horizontal" size="xs">
+                    {threadExecutions.length > 1 && (
+                      <Select
+                        selectedOption={
+                          selectedExecution
+                            ? {
+                                value: selectedExecution.id,
+                                label: `Run ${selectedExecution.id.slice(0, 8)}... (${selectedExecution.status})`,
+                              }
+                            : null
+                        }
+                        onChange={({ detail }) => {
+                          if (detail.selectedOption.value) {
+                            void handleViewDetail(detail.selectedOption.value);
+                          }
+                        }}
+                        options={threadExecutions.map((e) => ({
+                          value: e.id,
+                          label: `Run ${e.id.slice(0, 8)}... (${e.status})`,
+                        }))}
+                        placeholder="Select run"
+                      />
+                    )}
+                    <Select
+                      selectedOption={
+                        selectedModel
+                          ? { value: selectedModel, label: models.find((m) => m.id === selectedModel)?.label || selectedModel }
+                          : null
+                      }
+                      onChange={({ detail }) => setSelectedModel(detail.selectedOption.value || '')}
+                      options={models.map((m) => ({ value: m.id, label: m.label }))}
+                      placeholder="Select model"
+                    />
+                  </SpaceBetween>
                 }
               >
                 {selectedExecution?.conversation_title || 'Playground Transcript'}
@@ -503,15 +557,14 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
               {/* Transcript Scroll Area */}
               <div style={{ flex: 1, overflowY: 'auto', paddingRight: '8px' }}>
                 <SpaceBetween size="m">
-                  {selectedExecution?.messages && selectedExecution.messages.length > 0 ? (
-                    selectedExecution.messages.map((m, mIdx) => {
-                      const isUser = m.role === 'user';
-                      const content = m.content || {};
-
-                      if (isUser) {
+                  {transcriptGroups.length > 0 ? (
+                    transcriptGroups.map((group, gIdx) => {
+                      if (group.type === 'user') {
+                        const m = group.message;
+                        const content = m?.content || {};
                         return (
                           <div
-                            key={m.id || mIdx}
+                            key={m?.id || gIdx}
                             style={{
                               alignSelf: 'flex-end',
                               maxWidth: '85%',
@@ -535,10 +588,72 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
                         );
                       }
 
-                      // Assistant message
+                      if (group.type === 'trace') {
+                        const traceItems = group.items || [];
+                        return (
+                          <div
+                            key={`trace-${gIdx}`}
+                            style={{
+                              maxWidth: '90%',
+                              padding: '10px 14px',
+                              borderRadius: '8px',
+                              backgroundColor: 'var(--color-background-container-content, #ffffff)',
+                              border: '1px solid var(--color-border-divider-default, #eaeded)',
+                            }}
+                          >
+                            <Box fontWeight="bold" fontSize="body-s" color="text-body-secondary">
+                              ASSISTANT · {traceItems[0] ? new Date(traceItems[0].created_at).toLocaleTimeString() : ''}
+                            </Box>
+                            <ExpandableSection
+                              headerText={`Agent reasoning & tool trace (${traceItems.length} step${traceItems.length === 1 ? '' : 's'})`}
+                            >
+                              <SpaceBetween size="s">
+                                {traceItems.map((item, iIdx) => {
+                                  const content = item.content || {};
+                                  if (content.type === 'thinking' && content.data?.summary) {
+                                    const isProvider = content.data?.source === 'provider_summary';
+                                    return (
+                                      <div key={item.id || iIdx} style={{ padding: '4px 0' }}>
+                                        <Box fontWeight="bold" fontSize="body-s">
+                                          {isProvider ? 'Model reasoning summary:' : 'Approach summary:'}
+                                        </Box>
+                                        <Markdown content={content.data.summary} />
+                                      </div>
+                                    );
+                                  }
+                                  if (content.type === 'tool') {
+                                    const tStatus =
+                                      content.data?.status === 'error'
+                                        ? 'error'
+                                        : content.data?.status === 'loading'
+                                        ? 'loading'
+                                        : 'success';
+                                    return (
+                                      <div
+                                        key={item.id || iIdx}
+                                        style={{ fontSize: '0.85em', color: '#545b64', padding: '2px 0' }}
+                                      >
+                                        <StatusIndicator type={tStatus}>
+                                          <strong>Tool: {content.data?.name}</strong>{' '}
+                                          {content.data?.duration_ms ? `(${content.data.duration_ms} ms)` : ''}
+                                        </StatusIndicator>
+                                      </div>
+                                    );
+                                  }
+                                  return null;
+                                })}
+                              </SpaceBetween>
+                            </ExpandableSection>
+                          </div>
+                        );
+                      }
+
+                      // Single assistant message (cards, question, result)
+                      const m = group.message;
+                      const content = m?.content || {};
                       return (
                         <div
-                          key={m.id || mIdx}
+                          key={m?.id || gIdx}
                           style={{
                             maxWidth: '90%',
                             padding: '10px 14px',
@@ -550,27 +665,6 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
                           <Box fontWeight="bold" fontSize="body-s" color="text-body-secondary">
                             ASSISTANT · {new Date(m.created_at).toLocaleTimeString()}
                           </Box>
-                          {content.type === 'thinking' && content.data?.summary && (
-                            <ExpandableSection headerText="Model reasoning summary">
-                              <Markdown content={content.data.summary} />
-                            </ExpandableSection>
-                          )}
-                          {content.type === 'tool' && (
-                            <div style={{ fontSize: '0.85em', color: '#545b64' }}>
-                              <StatusIndicator
-                                type={
-                                  content.data?.status === 'error'
-                                    ? 'error'
-                                    : content.data?.status === 'loading'
-                                    ? 'loading'
-                                    : 'success'
-                                }
-                              >
-                                <strong>Tool: {content.data?.name}</strong>{' '}
-                                {content.data?.duration_ms ? `(${content.data.duration_ms} ms)` : ''}
-                              </StatusIndicator>
-                            </div>
-                          )}
                           {content.type === 'cards' && content.data?.cards && (
                             <Box>
                               <Badge color="green">

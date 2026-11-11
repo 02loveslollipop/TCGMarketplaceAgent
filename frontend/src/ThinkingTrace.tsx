@@ -26,8 +26,10 @@ export function ThinkingTrace({entries, active}:{entries: ChatEntry[]; active: b
 
   if (!items.length) return null;
 
-  const failed = items.some(entry => entry.data.status === 'error');
-  const interrupted = !active && items.some(entry => entry.data.status === 'loading' || entry.data.status === 'error');
+  const thinkingItems = items.filter(entry => entry.type === 'thinking');
+  const targetItems = thinkingItems.length ? thinkingItems : items;
+  const failed = targetItems.some(entry => entry.data.status === 'error');
+  const interrupted = !active && targetItems.some(entry => entry.data.status === 'loading' || entry.data.status === 'error');
   const label = active ? 'Thinking' : interrupted ? 'Thinking interrupted' : 'Completed thinking';
   const statusType = active ? 'loading' : failed ? 'error' : interrupted ? 'stopped' : 'info';
 

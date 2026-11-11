@@ -92,9 +92,31 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
         if(row.role==='assistant'&&row.content.type){if(row.content.type==='question')previousQuestion=row.content.data as Question;return [entry({type:row.content.type,data:row.content.data} as AgentEvent,row.created_at)];}
         return [];
       });
+      const deduplicated: typeof restored = [];
+      const turnSeen = new Map<string, number>();
+      for (const item of restored) {
+        if (item.type === 'user') {
+          turnSeen.clear();
+          deduplicated.push(item);
+          continue;
+        }
+        if (item.type === 'thinking' || item.type === 'tool') {
+          const itemId = (item.data as any)?.id;
+          if (itemId) {
+            const key = `${item.type}:${itemId}`;
+            const prevIdx = turnSeen.get(key);
+            if (prevIdx !== undefined) {
+              deduplicated[prevIdx] = item;
+              continue;
+            }
+            turnSeen.set(key, deduplicated.length);
+          }
+        }
+        deduplicated.push(item);
+      }
       let waitingQuestion:Question|null=null,waitingExecution='';const last=history.at(-1);
       if(last?.content.type==='question'&&last.content.execution_id){const result=await api<{status:string}>(`/api/chat/executions/${last.content.execution_id}`,token);if(result.status==='waiting'){waitingQuestion=last.content.data as Question;waitingExecution=last.content.execution_id;}}
-      if(!alive.current)return;setImages([]);setImageError('');setConversation(id);setEvents(restored);setQuestion(waitingQuestion);setExecution(waitingExecution);closePreview();atBottom.current=true;setJumpVisible(false);setAnnouncement('Conversation loaded.');onConversationSelected?.();
+      if(!alive.current)return;setImages([]);setImageError('');setConversation(id);setEvents(deduplicated);setQuestion(waitingQuestion);setExecution(waitingExecution);closePreview();atBottom.current=true;setJumpVisible(false);setAnnouncement('Conversation loaded.');onConversationSelected?.();
     }catch(error){setError((error as Error).message);}finally{if(alive.current)setHistoryLoading(false);}
   }
   async function handleRename(){

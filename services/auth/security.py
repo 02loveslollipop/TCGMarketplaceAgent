@@ -66,6 +66,29 @@ class Tokens:
         except jwt.InvalidTokenError as error:
             raise AuthenticationError("Invalid or expired token.") from error
 
+    def read_for_refresh(self, token: str, kind="access", max_grace_seconds: int = 86400) -> dict:
+        try:
+            return self.read(token, kind)
+        except AuthenticationError:
+            try:
+                claims = jwt.decode(
+                    token, self.public_key, algorithms=["RS256"],
+                    issuer="pokemon-tcg-auth", audience="pokemon-tcg-poc",
+                    options={"verify_exp": False, "require": ["sub", "exp", "iat", "nbf", "jti", "type", "version"]},
+                )
+            except jwt.InvalidTokenError as decode_err:
+                raise AuthenticationError("Invalid token signature or claims.") from decode_err
+
+            if claims.get("type") != kind:
+                raise AuthenticationError("Token has incorrect purpose.")
+
+            exp = claims.get("exp", 0)
+            now_ts = int(time.time())
+            if now_ts - exp > max_grace_seconds:
+                raise AuthenticationError("Token expired beyond refresh grace period.")
+
+            return claims
+
 
 def aware(value: datetime) -> datetime:
     return value.replace(tzinfo=timezone.utc) if value.tzinfo is None else value
@@ -94,6 +117,20 @@ class Security:
         if kind == "enrollment":
             with self.repo.transaction() as session:
                 self.enrollment_parent(session,user,claims.get("challenge_id"))
+        return user
+
+    def current_for_refresh(self, token: str, kind="access", max_grace_seconds: int = 86400) -> User:
+        claims = self.tokens.read_for_refresh(token, kind, max_grace_seconds)
+        user = self.repo.user(user_id=claims["sub"])
+        if not user or not user.active or user.token_version != claims["version"]:
+            raise AuthenticationError("Account or session is unavailable.")
+        if kind == "access":
+            dev_session = claims.get("dev_session")
+            if dev_session is not None:
+                if not self._local_password_only or not secrets.compare_digest(str(dev_session), self._dev_session):
+                    raise AuthenticationError("Development session is unavailable.")
+            elif not self.has_factor(user):
+                raise AuthenticationError("Complete second-factor enrollment before using this application.")
         return user
 
     def has_factor(self,user):

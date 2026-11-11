@@ -106,7 +106,7 @@ export function Shell({admin=false}:{admin?:boolean}) {
     setUser(account);
   }
   function navigate(next:Page){setPage(next);if(next==='overview'||next==='accounts'||next==='models'||next==='roles'||next==='activity')setAdminSection(next);window.location.hash=next;}
-  function clear(){setToken('');setUser(null);setArtifact(null);setArtifactOpen(false);}
+  function clear(){setToken('');setLatestToken('');setUser(null);setArtifact(null);setArtifactOpen(false);}
   function securityChanged(message:string){setNotice(message);clear();}
   async function signOut(){try{await api('/api/auth/logout',token,{method:'POST'});}catch{setNotice('Signed out locally. Server session invalidation could not be confirmed.');}finally{clear();}}
   if(checkingSession)return <Box padding="l"><StatusIndicator type="loading">Checking your session</StatusIndicator></Box>;

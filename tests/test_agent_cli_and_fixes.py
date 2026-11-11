@@ -163,3 +163,238 @@ async def test_stream_sse_parser():
     assert events[0] == ("execution", {"id": "exec-1", "conversation_id": "conv-1"})
     assert events[1] == ("progress", {"step": "understand", "message": "Thinking..."})
     assert events[2] == ("done", {"status": "complete"})
+
+
+def test_auth_and_chat_endpoint_helpers():
+    from scripts.agent_cli import auth_endpoint, chat_endpoint
+
+    # Local gateway
+    assert auth_endpoint("http://localhost:8080", "", "/token") == "http://localhost:8080/api/auth/token"
+    assert auth_endpoint("http://localhost:8080", "", "/api/auth/token") == "http://localhost:8080/api/auth/token"
+    assert chat_endpoint("http://localhost:8080", "/executions") == "http://localhost:8080/api/chat/executions"
+    assert chat_endpoint("http://localhost:8080", "/api/chat/executions") == "http://localhost:8080/api/chat/executions"
+
+    # Split domain direct Heroku deployment
+    assert (
+        auth_endpoint("https://api.chat.tcgagent.herokuapp.com", "", "/token")
+        == "https://api.auth.tcgagent.herokuapp.com/token"
+    )
+    assert (
+        auth_endpoint("https://api.chat.tcgagent.herokuapp.com", "", "/api/auth/token")
+        == "https://api.auth.tcgagent.herokuapp.com/token"
+    )
+    assert (
+        chat_endpoint("https://api.chat.tcgagent.herokuapp.com", "/executions")
+        == "https://api.chat.tcgagent.herokuapp.com/executions"
+    )
+
+    # Explicit auth_url
+    assert (
+        auth_endpoint("http://localhost:8000", "http://localhost:8001", "/token")
+        == "http://localhost:8001/token"
+    )
+
+
+@pytest.mark.asyncio
+async def test_resolve_auth_token_form_and_totp():
+    import argparse
+    from scripts.agent_cli import resolve_auth_token
+
+    calls = []
+
+    def handler(request: httpx.Request):
+        calls.append(request)
+        if request.url.path == "/api/auth/token":
+            # Must receive form data
+            assert request.headers["content-type"].startswith("application/x-www-form-urlencoded")
+            body = request.read().decode("utf-8")
+            assert "username=admin" in body
+            assert "password=secret" in body
+            return httpx.Response(200, json={"challenge_token": "chal-123"})
+        if request.url.path == "/api/auth/totp/challenge":
+            data = json.loads(request.read().decode("utf-8"))
+            assert data["challenge_token"] == "chal-123"
+            assert data["code"] == "123456"
+            return httpx.Response(200, json={"access_token": "valid-jwt-token"})
+        return httpx.Response(404)
+
+    transport = httpx.MockTransport(handler)
+    async with httpx.AsyncClient(transport=transport) as client:
+        args = argparse.Namespace(
+            token="",
+            token_file="",
+            cookie="",
+            username="admin",
+            password="secret",
+            totp_code="123456",
+            totp_secret="",
+            refresh=False,
+            auth_url="",
+        )
+        token = await resolve_auth_token(client, "http://localhost:8080", args)
+        assert token == "valid-jwt-token"
+        assert len(calls) == 2
+
+
+def test_normalize_printing_synonyms():
+    assert normalize_printing("holo") == "holofoil"
+    assert normalize_printing("non-holo") == "normal"
+    assert normalize_printing("non holo") == "normal"
+    assert normalize_printing("rev holo") == "reverse holofoil"
+    assert normalize_printing("reverse holo") == "reverse holofoil"
+    assert normalize_printing("standard") == "any"
+    assert normalize_printing("not applicable") == "any"
+
+
+@pytest.mark.asyncio
+async def test_cardmarket_derived_holo_offer():
+    suppliers = Suppliers()
+    card = CardRequest(
+        card_id="xy3-55",
+        name="M Lucario EX",
+        set_name="Furious Fists",
+        number="55",
+        condition="Near Mint",
+        language="English",
+        printing="holofoil",
+        quantity=1,
+    )
+    # Cardmarket only returns low/trend (normal_low) because the card is naturally holo
+    tcgdex_holo_sample = {
+        "pricing": {
+            "tcgplayer": {
+                "unit": "USD",
+                "holofoil": {"lowPrice": 12.0, "marketPrice": 15.0},
+            },
+            "cardmarket": {
+                "unit": "EUR",
+                "low": 8.50,
+                "trend": 10.00,
+                "avg": 9.50,
+                "low-holo": 0.0,
+                "trend-holo": 0.0,
+            },
+        }
+    }
+    suppliers._tcgdex_cache["en:xy3-55"] = tcgdex_holo_sample
+
+    offers = await suppliers.quote("Cardmarket", card)
+    assert len(offers) >= 1
+    holo_offer = next((o for o in offers if o.printing == "Holofoil"), None)
+    assert holo_offer is not None
+    assert holo_offer.price == Decimal("8.50")
+    assert equivalent(card, holo_offer) is True
+
+
+@pytest.mark.asyncio
+async def test_basic_energy_fallback_candidates():
+    suppliers = Suppliers()
+    # Fighting Energy mee-006 has no TCGplayer pricing
+    suppliers._tcgdex_cache["en:mee-006"] = {
+        "pricing": {
+            "cardmarket": {"unit": "EUR", "low": 0.10},
+        }
+    }
+    # But sve-006 has TCGplayer pricing
+    suppliers._tcgdex_cache["en:sve-006"] = {
+        "pricing": {
+            "tcgplayer": {
+                "unit": "USD",
+                "normal": {"lowPrice": 0.15, "marketPrice": 0.25},
+            }
+        }
+    }
+    # Name lookup returns candidates
+    suppliers._tcgdex_cache["name:en:fighting energy"] = [
+        {"id": "mee-006", "name": "Fighting Energy", "localId": "006"},
+        {"id": "sve-006", "name": "Basic Fighting Energy", "localId": "006"},
+    ]
+
+    card = CardRequest(
+        card_id="mee-006",
+        name="Fighting Energy",
+        set_name="MEE",
+        number="006",
+        condition="Near Mint",
+        language="English",
+        printing="any",
+        basic_energy=True,
+        quantity=8,
+    )
+
+    tcg_offers = await suppliers.quote("TCGplayer", card)
+    assert len(tcg_offers) > 0
+    assert tcg_offers[0].supplier == "TCGplayer"
+    assert tcg_offers[0].set_name == "MEE"
+    assert tcg_offers[0].number == "006"
+    assert equivalent(card, tcg_offers[0]) is True
+
+
+def test_tokens_read_for_refresh_grace_period():
+    from shared.db import User
+    from services.auth.security import Tokens, AuthenticationError
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    priv_pem = key.private_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PrivateFormat.PKCS8,
+        encryption_algorithm=serialization.NoEncryption(),
+    ).decode("utf-8")
+    pub_pem = key.public_key().public_bytes(
+        encoding=serialization.Encoding.PEM,
+        format=serialization.PublicFormat.SubjectPublicKeyInfo,
+    ).decode("utf-8")
+
+    tokens = Tokens(public_key=pub_pem, private_key=priv_pem)
+    user = User(id="u1", username="test", role="user", active=True, token_version=1)
+
+    # Valid token
+    tok = tokens.issue(user, "access")
+    claims = tokens.read_for_refresh(tok)
+    assert claims["sub"] == "u1"
+
+    # Expired 2 hours ago (within 24h grace)
+    import time, jwt
+    now = int(time.time())
+    expired_payload = {
+        "sub": "u1", "iss": "pokemon-tcg-auth", "aud": "pokemon-tcg-poc",
+        "iat": now - 7200, "nbf": now - 7200, "exp": now - 3600,
+        "jti": "jti-1", "type": "access", "version": 1,
+    }
+    expired_tok = jwt.encode(expired_payload, priv_pem, algorithm="RS256")
+
+    # read() rejects it
+    with pytest.raises(AuthenticationError):
+        tokens.read(expired_tok)
+
+    # read_for_refresh() accepts it
+    ref_claims = tokens.read_for_refresh(expired_tok, max_grace_seconds=86400)
+    assert ref_claims["sub"] == "u1"
+
+    # Expired 25 hours ago (beyond 24h grace)
+    way_expired_payload = dict(expired_payload, exp=now - 90000)
+    way_expired_tok = jwt.encode(way_expired_payload, priv_pem, algorithm="RS256")
+    with pytest.raises(AuthenticationError, match="beyond refresh grace period"):
+        tokens.read_for_refresh(way_expired_tok, max_grace_seconds=86400)
+
+
+def test_context_preserves_approach_summary():
+    from services.orchestrator.context import planning_content
+
+    history = [
+        {"role": "user", "content": {"text": "Hello"}},
+        {"role": "assistant", "content": {"type": "thinking", "data": {"source": "provider_summary", "summary": "Thinking..."}}},
+        {"role": "assistant", "content": {"type": "thinking", "data": {"source": "approach_summary", "summary": "Approach plan."}}},
+        {"role": "assistant", "content": {"type": "tool", "data": {"name": "search"}}},
+    ]
+    content = planning_content("Build deck", history, [])
+    text_data = json.loads(content[0]["text"])
+    conv = text_data["conversation"]
+
+    # provider_summary and tool should be filtered out, approach_summary should be kept!
+    types = [c["content"].get("type") for c in conv if "type" in c["content"]]
+    assert types == ["thinking"]
+    assert conv[1]["content"]["data"]["source"] == "approach_summary"
+

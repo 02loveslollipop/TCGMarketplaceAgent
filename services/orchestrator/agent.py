@@ -1,16 +1,16 @@
-"""A real LangGraph workflow with durable, owner-bound human interruptions."""
 import asyncio
 import json
 from typing import TypedDict
+import uuid
 from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command, interrupt
 
-from shared.contracts import AgentPlan, Decision, Legality, Offer
+from shared.contracts import AgentPlan, Decision, Legality, Offer, Source
 from services.orchestrator.budget import budgets
 from services.orchestrator.checkpoints import DatabaseSaver
 from services.orchestrator.suppliers import SupplierError
 from services.orchestrator.progress import progress
-from services.orchestrator.trace import tool_start,tool_end
+from services.orchestrator.trace import tool_start, tool_end, event_writer
 
 
 class State(TypedDict, total=False):
@@ -58,6 +58,19 @@ class DeckAgent:
         if state.get("images"):
             progress("context",f"Using {len(state['images'])} image attachments as context; card identities still require source verification.")
         progress("understand","Resolving the request with sourced card and deck research.")
+
+        # Pre-seed research sources from any previous plan sources
+        if state.get("plan", {}).get("sources"):
+            for s in state["plan"]["sources"]:
+                url_val = s.get("url") if isinstance(s, dict) else getattr(s, "url", None)
+                if url_val:
+                    try:
+                        self.planner.research.sources[str(url_val)] = (
+                            Source.model_validate(s) if isinstance(s, dict) else s
+                        )
+                    except Exception:
+                        pass
+
         kwargs = {}
         if state.get("images"):
             kwargs["images"] = state["images"]
@@ -87,7 +100,20 @@ class DeckAgent:
             text = f"{decision.selected_option} ({text})"
         if decision.action != "clarify" or not text:
             raise ValueError("A clarification answer is required.")
-        return {"request": state["request"] + "\nUser clarification: " + text}
+
+        history = list(state.get("history") or [])
+        history.append({
+            "role": "assistant",
+            "content": {"type": "question", "data": interrupt_payload},
+        })
+        history.append({
+            "role": "user",
+            "content": {"text": text},
+        })
+        return {
+            "request": state["request"] + "\nUser clarification: " + text,
+            "history": history,
+        }
 
     async def validate(self, state):
         plan = AgentPlan.model_validate(state["plan"])
@@ -137,11 +163,39 @@ class DeckAgent:
         if decision.action == "keep_missing" and decision.approved:
             return {"consent":{"action":"keep_missing", "missing":state["budget"]["missing"], "approved":True}}
         if decision.action == "substitute" and decision.approved and decision.text.strip():
-            return {"request":state["request"] + "\nUser explicitly requests researching these substitutes: " + decision.text,
-                    "consent":{"action":"substitute", "text":decision.text, "approved":True}}
+            history = list(state.get("history") or [])
+            history.append({
+                "role": "assistant",
+                "content": {
+                    "type": "question",
+                    "data": state["question"],
+                    "missing": state["budget"]["missing"],
+                    "guidance": state["question"].get("guidance", ""),
+                    "plan": state.get("plan"),
+                },
+            })
+            history.append({
+                "role": "user",
+                "content": {"text": decision.text},
+            })
+            return {
+                "request": state["request"] + "\nUser explicitly requests researching these substitutes: " + decision.text,
+                "consent": {"action": "substitute", "text": decision.text, "approved": True},
+                "history": history,
+            }
         raise ValueError("Explicit permission for the current missing cards or named substitutes is required.")
 
     async def finish(self, state):
+        if state.get("consent", {}).get("action") == "keep_missing":
+            event_writer()({
+                "type": "thinking",
+                "data": {
+                    "id": uuid.uuid4().hex,
+                    "status": "complete",
+                    "source": "approach_summary",
+                    "summary": "Applied user approval to retain missing cards and finalized supplier budgets.",
+                },
+            })
         return {"event":{"type":"result", "data":{"plan":state["plan"], "legality":state["legality"],
                     "offers":state["offers"], **state["budget"], "supplier_errors":state["supplier_errors"], "consent":state.get("consent",{})}}}
 

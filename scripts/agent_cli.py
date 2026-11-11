@@ -46,8 +46,49 @@ async def stream_sse(
                 current_data.append(line[len("data: "):])
 
 
+def auth_endpoint(base_url: str, auth_url: str, path: str) -> str:
+    """Resolve an auth URL path for direct service or API gateway."""
+    target_base = auth_url.strip() if auth_url else ""
+    if not target_base:
+        if "api.chat." in base_url:
+            target_base = base_url.replace("api.chat.", "api.auth.")
+        else:
+            target_base = base_url.rstrip("/")
+
+    target_base = target_base.rstrip("/")
+    if not path.startswith("/"):
+        path = "/" + path
+
+    is_direct = bool(auth_url) or ("api.chat." in base_url)
+    if is_direct:
+        if path.startswith("/api/auth/"):
+            path = path[len("/api/auth"):]
+        return f"{target_base}{path}"
+    else:
+        if not path.startswith("/api/auth/"):
+            path = f"/api/auth{path}"
+        return f"{target_base}{path}"
+
+
+def chat_endpoint(base_url: str, path: str) -> str:
+    """Resolve a chat/orchestrator URL path for direct service or API gateway."""
+    base = base_url.rstrip("/")
+    if not path.startswith("/"):
+        path = "/" + path
+
+    if "api.chat." in base:
+        if path.startswith("/api/chat/"):
+            path = path[len("/api/chat"):]
+        return f"{base}{path}"
+    else:
+        if not path.startswith("/api/chat/"):
+            path = f"/api/chat{path}"
+        return f"{base}{path}"
+
+
 async def resolve_auth_token(client: httpx.AsyncClient, base_url: str, args: argparse.Namespace) -> str:
     """Resolve an authenticated Bearer token via CLI args, env, cookies, or credentials."""
+    auth_url_arg = getattr(args, "auth_url", "")
     token = args.token or os.getenv("TCG_BEARER_TOKEN", "")
     if not token and args.token_file:
         try:
@@ -59,7 +100,7 @@ async def resolve_auth_token(client: httpx.AsyncClient, base_url: str, args: arg
     if token:
         if args.refresh:
             resp = await client.get(
-                f"{base_url}/api/auth/portal-session",
+                auth_endpoint(base_url, auth_url_arg, "/portal-session"),
                 headers={"Authorization": f"Bearer {token}"},
             )
             if resp.status_code == 200:
@@ -74,7 +115,7 @@ async def resolve_auth_token(client: httpx.AsyncClient, base_url: str, args: arg
     if cookie:
         cookie_header = f"__Host-tcg_portal={cookie}; tcg_portal_local={cookie}"
         resp = await client.get(
-            f"{base_url}/api/auth/portal-session",
+            auth_endpoint(base_url, auth_url_arg, "/portal-session"),
             headers={"Cookie": cookie_header},
         )
         if resp.status_code == 200:
@@ -89,8 +130,8 @@ async def resolve_auth_token(client: httpx.AsyncClient, base_url: str, args: arg
     password = args.password or os.getenv("TCG_PASSWORD", "")
     if username and password:
         resp = await client.post(
-            f"{base_url}/api/auth/token",
-            json={"username": username, "password": password},
+            auth_endpoint(base_url, auth_url_arg, "/token"),
+            data={"username": username, "password": password},
         )
         if resp.status_code != 200:
             raise RuntimeError(f"Login failed: HTTP {resp.status_code} {resp.text}")
@@ -106,7 +147,7 @@ async def resolve_auth_token(client: httpx.AsyncClient, base_url: str, args: arg
                 except ImportError:
                     raise RuntimeError("pyotp is required for --totp-secret. Install pyotp or pass --totp-code.")
             verify_resp = await client.post(
-                f"{base_url}/api/auth/mfa/verify",
+                auth_endpoint(base_url, auth_url_arg, "/totp/challenge"),
                 json={"challenge_token": data["challenge_token"], "code": code},
             )
             if verify_resp.status_code == 200:
@@ -202,7 +243,7 @@ async def main_async(args: argparse.Namespace) -> int:
 
             return None
 
-        question = await execute_turn(f"{base_url}/api/chat/executions", start_payload)
+        question = await execute_turn(chat_endpoint(base_url, "/executions"), start_payload)
 
         # Multi-turn decision loop
         while question and not final_result:
@@ -240,7 +281,7 @@ async def main_async(args: argparse.Namespace) -> int:
                 return 1
 
             question = await execute_turn(
-                f"{base_url}/api/chat/executions/{execution_id}/resume",
+                chat_endpoint(base_url, f"/executions/{execution_id}/resume"),
                 decision_payload,
             )
 
@@ -276,6 +317,7 @@ def main():
     parser.add_argument("--prompt", default="Help me build a M Lucario ex deck for standard format", help="User prompt")
     parser.add_argument("--model", default="gpt-6-luna", help="Model registry ID")
     parser.add_argument("--base-url", default=os.getenv("TCG_BASE_URL", "http://localhost:8080"), help="Base URL")
+    parser.add_argument("--auth-url", default=os.getenv("TCG_AUTH_URL", ""), help="Auth service base URL (if separate from gateway/chat)")
     parser.add_argument("--token", help="Bearer JWT token")
     parser.add_argument("--token-file", help="File with Bearer token")
     parser.add_argument("--cookie", help="Browser session cookie value")

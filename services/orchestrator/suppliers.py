@@ -6,12 +6,12 @@ other technical block is bypassed.
 import os
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
-from urllib.parse import urlparse
+from urllib.parse import quote, urlparse
 import httpx
 from pydantic import ValidationError
 
 from shared.contracts import CardRequest, Offer, Source, utcnow
-from services.orchestrator.budget import normalize_condition
+from services.orchestrator.budget import normalize_condition, normalize_printing
 
 TCGPLAYER_ACTOR = "devcake~tcgplayer-data-scraper"
 TCGPLAYER_LISTINGS_ACTOR = "crawloop~tcgplayer-listings-scraper"
@@ -122,22 +122,34 @@ class Suppliers:
             pass
         return None
 
-    async def _quote_from_tcgdex(self, card: CardRequest, supplier: str) -> list[Offer]:
-        if not card.card_id:
-            return []
-        lang = "ja" if (card.language or "").lower() in {"japanese", "ja"} else "en"
-        data = await self._fetch_tcgdex(card.card_id, lang)
-        pricing = (data or {}).get("pricing") if isinstance(data, dict) else None
-        if not pricing and lang != "en":
-            data = await self._fetch_tcgdex(card.card_id, "en")
-            pricing = (data or {}).get("pricing") if isinstance(data, dict) else None
-        if not isinstance(pricing, dict):
-            return []
+    async def _fetch_tcgdex_by_name(self, name: str, lang: str = "en") -> list[dict]:
+        key = f"name:{lang}:{name.strip().casefold()}"
+        if key in self._tcgdex_cache:
+            return self._tcgdex_cache[key]
+        url = f"https://api.tcgdex.net/v2/{lang}/cards?name={quote(name)}"
+        try:
+            async with httpx.AsyncClient(timeout=15) as client:
+                resp = await client.get(url)
+                if resp.status_code == 200:
+                    data = resp.json()
+                    if isinstance(data, list):
+                        self._tcgdex_cache[key] = data
+                        return data
+        except Exception:
+            pass
+        return []
 
+    def _offers_from_tcgdex_pricing(
+        self,
+        card_id: str,
+        pricing: dict,
+        supplier: str,
+        card: CardRequest,
+        id_source: Source,
+    ) -> list[Offer]:
         offers: list[Offer] = []
         cond_val = card.condition if normalize_condition(card.condition) != "any" else "Near Mint"
         lang_val = card.language or "English"
-        id_source = Source(url=f"https://api.tcgdex.net/v2/en/cards/{card.card_id}", title=f"{card.name} #{card.number}")
 
         if supplier == "TCGplayer":
             tcg = pricing.get("tcgplayer")
@@ -158,18 +170,18 @@ class Suppliers:
                     mid_price = finish_data.get("midPrice")
 
                     printing = "Reverse Holofoil" if "reverse" in finish_key.lower() else ("Holofoil" if "holo" in finish_key.lower() else "Normal")
-                    product_url = f"https://www.tcgplayer.com/product/{product_id}" if product_id else f"https://api.tcgdex.net/v2/en/cards/{card.card_id}"
+                    product_url = f"https://www.tcgplayer.com/product/{product_id}" if product_id else f"https://api.tcgdex.net/v2/en/cards/{card_id}"
                     source = Source(url=product_url, title=f"{card.name} ({card.set_name} #{card.number}) — TCGplayer via TCGdex", retrieved_at=retrieved_at)
 
                     chosen_prices = []
                     best_low = direct_low_price if (direct_low_price is not None and direct_low_price > 0) else low_price
                     if best_low is not None and best_low > 0:
-                        chosen_prices.append((f"tcgplayer:{card.card_id}:{finish_key}:low", decimal(best_low), "TCGplayer Lowest Listing"))
+                        chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:low", decimal(best_low), "TCGplayer Lowest Listing"))
                     if market_price is not None and market_price > 0:
                         if not best_low or abs(float(market_price) - float(best_low)) > 0.001:
-                            chosen_prices.append((f"tcgplayer:{card.card_id}:{finish_key}:market", decimal(market_price), "TCGplayer Market Listing"))
+                            chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:market", decimal(market_price), "TCGplayer Market Listing"))
                     elif not chosen_prices and mid_price is not None and mid_price > 0:
-                        chosen_prices.append((f"tcgplayer:{card.card_id}:{finish_key}:mid", decimal(mid_price), "TCGplayer Mid Listing"))
+                        chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:mid", decimal(mid_price), "TCGplayer Mid Listing"))
 
                     for offer_id, price_val, seller_label in chosen_prices:
                         offers.append(Offer(
@@ -203,13 +215,13 @@ class Suppliers:
                     retrieved_at = datetime.fromisoformat(updated_str.replace("Z", "+00:00")) if updated_str else utcnow()
                 except Exception:
                     retrieved_at = utcnow()
-                product_url = f"https://www.cardmarket.com/en/Pokemon/Products/Singles?idProduct={id_product}" if id_product else str(card.cardmarket_url or f"https://api.tcgdex.net/v2/en/cards/{card.card_id}")
+                product_url = f"https://www.cardmarket.com/en/Pokemon/Products/Singles?idProduct={id_product}" if id_product else str(card.cardmarket_url or f"https://api.tcgdex.net/v2/en/cards/{card_id}")
                 source = Source(url=product_url, title=f"{card.name} ({card.set_name} #{card.number}) — Cardmarket via TCGdex", retrieved_at=retrieved_at)
 
                 normal_low = cm.get("low") or cm.get("trend") or cm.get("avg")
                 if normal_low is not None and normal_low > 0:
                     offers.append(Offer(
-                        id=f"cardmarket:{card.card_id}:normal",
+                        id=f"cardmarket:{card_id}:normal",
                         name=card.name,
                         supplier="Cardmarket",
                         set_name=card.set_name,
@@ -232,7 +244,7 @@ class Suppliers:
                 holo_low = cm.get("low-holo") or cm.get("trend-holo") or cm.get("avg-holo")
                 if holo_low is not None and holo_low > 0:
                     offers.append(Offer(
-                        id=f"cardmarket:{card.card_id}:holo",
+                        id=f"cardmarket:{card_id}:holo",
                         name=card.name,
                         supplier="Cardmarket",
                         set_name=card.set_name,
@@ -251,6 +263,78 @@ class Suppliers:
                         source=source,
                         identity_source=id_source,
                     ))
+                elif (holo_low is None or holo_low <= 0) and (normal_low is not None and normal_low > 0):
+                    tcg_data = pricing.get("tcgplayer") if isinstance(pricing.get("tcgplayer"), dict) else {}
+                    tcg_finishes = [k for k, v in tcg_data.items() if isinstance(v, dict)]
+                    tcg_only_holo = bool(tcg_finishes) and all("holo" in k.lower() for k in tcg_finishes)
+                    card_is_holo = normalize_printing(card.printing) == "holofoil"
+                    if tcg_only_holo or card_is_holo:
+                        offers.append(Offer(
+                            id=f"cardmarket:{card_id}:holo",
+                            name=card.name,
+                            supplier="Cardmarket",
+                            set_name=card.set_name,
+                            number=card.number,
+                            condition=cond_val,
+                            language=lang_val,
+                            printing="Holofoil",
+                            price=decimal(normal_low),
+                            currency=currency,
+                            quantity=max(card.quantity, 4),
+                            availability="in_stock",
+                            price_kind="listing",
+                            shipping=None,
+                            shipping_confirmed=False,
+                            seller="Cardmarket Trend/Low (Foil)",
+                            source=source,
+                            identity_source=id_source,
+                        ))
+
+        return offers
+
+    async def _quote_from_tcgdex(self, card: CardRequest, supplier: str) -> list[Offer]:
+        if not card.card_id:
+            return []
+        lang = "ja" if (card.language or "").lower() in {"japanese", "ja"} else "en"
+        data = await self._fetch_tcgdex(card.card_id, lang)
+        pricing = (data or {}).get("pricing") if isinstance(data, dict) else None
+        if not pricing and lang != "en":
+            data = await self._fetch_tcgdex(card.card_id, "en")
+            pricing = (data or {}).get("pricing") if isinstance(data, dict) else None
+
+        id_source = Source(url=f"https://api.tcgdex.net/v2/en/cards/{card.card_id}", title=f"{card.name} #{card.number}")
+        offers: list[Offer] = []
+        if isinstance(pricing, dict):
+            offers = self._offers_from_tcgdex_pricing(card.card_id, pricing, supplier, card, id_source)
+
+        if not offers:
+            is_energy = card.basic_energy or card.name.strip().casefold().endswith(" energy")
+            candidates = await self._fetch_tcgdex_by_name(card.name, lang)
+            candidate_ids = []
+            for item in candidates:
+                cand_id = item.get("id")
+                if not cand_id or cand_id == card.card_id:
+                    continue
+                if is_energy:
+                    candidate_ids.append(cand_id)
+                else:
+                    cand_local = str(item.get("localId", "")).lstrip("0")
+                    card_num = str(card.number or "").lstrip("0")
+                    if cand_local and card_num and cand_local == card_num:
+                        candidate_ids.append(cand_id)
+
+            for cand_id in candidate_ids[:6]:
+                cand_data = await self._fetch_tcgdex(cand_id, lang)
+                cand_pricing = (cand_data or {}).get("pricing") if isinstance(cand_data, dict) else None
+                if not cand_pricing and lang != "en":
+                    cand_data = await self._fetch_tcgdex(cand_id, "en")
+                    cand_pricing = (cand_data or {}).get("pricing") if isinstance(cand_data, dict) else None
+                if isinstance(cand_pricing, dict):
+                    cand_id_source = Source(url=f"https://api.tcgdex.net/v2/en/cards/{cand_id}", title=f"{card.name} #{card.number}")
+                    cand_offers = self._offers_from_tcgdex_pricing(cand_id, cand_pricing, supplier, card, cand_id_source)
+                    if cand_offers:
+                        offers.extend(cand_offers)
+                        break
 
         return offers
 

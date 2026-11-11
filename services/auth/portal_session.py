@@ -22,14 +22,25 @@ def install_portal_sessions(app, security, serialize, current):
         if not origin and request.headers.get('sec-fetch-site')=='cross-site':
             raise HTTPException(403,'Cross-site session access is unavailable.')
 
-    def _extract_token(request: Request, cookie_name: str) -> str:
+    def _extract_tokens(request: Request, cookie_name: str) -> list[str]:
+        tokens = []
         cookie_tok = request.cookies.get(cookie_name, '').strip()
         if cookie_tok:
-            return cookie_tok
+            tokens.append(cookie_tok)
         auth_hdr = request.headers.get('authorization', '').strip()
         if auth_hdr.lower().startswith('bearer '):
-            return auth_hdr[7:].strip()
-        return ''
+            hdr_tok = auth_hdr[7:].strip()
+            if hdr_tok and hdr_tok not in tokens:
+                tokens.append(hdr_tok)
+        for alt_name in ('__Host-tcg_portal', 'tcg_portal_local'):
+            alt_tok = request.cookies.get(alt_name, '').strip()
+            if alt_tok and alt_tok not in tokens:
+                tokens.append(alt_tok)
+        return tokens
+
+    def _extract_token(request: Request, cookie_name: str) -> str:
+        tokens = _extract_tokens(request, cookie_name)
+        return tokens[0] if tokens else ''
 
     @app.post('/portal-session')
     def remember(request:Request,response:Response,user=Depends(current)):
@@ -46,21 +57,30 @@ def install_portal_sessions(app, security, serialize, current):
     def restore(request:Request,response:Response):
         trusted_origin(request)
         name,secure=cookie_settings(request)
-        token=_extract_token(request, name)
-        if not token:
+        tokens = _extract_tokens(request, name)
+        if not tokens:
             response.status_code=401
             response.delete_cookie(name,path='/',secure=secure,httponly=True,samesite='strict')
             response.headers['Cache-Control']='no-store'
             return {'error':{'message':'No active portal session.'}}
-        try:
-            user=security.current(token)
-            claims=security.tokens.read(token)
-            fresh_token=security.tokens.issue(user, "access", dev_session=claims.get("dev_session"))
-        except AuthenticationError:
+
+        user = None
+        claims = None
+        for tok in tokens:
+            try:
+                user = security.current_for_refresh(tok)
+                claims = security.tokens.read_for_refresh(tok)
+                break
+            except AuthenticationError:
+                continue
+
+        if not user or not claims:
             response.status_code=401
             response.delete_cookie(name,path='/',secure=secure,httponly=True,samesite='strict')
             response.headers['Cache-Control']='no-store'
             return {'error':{'message':'No active portal session.'}}
+
+        fresh_token = security.tokens.issue(user, "access", dev_session=claims.get("dev_session"))
         max_age=get_max_age()
         response.set_cookie(name,fresh_token,max_age=max_age,httponly=True,secure=secure,samesite='strict',path='/')
         response.headers['Cache-Control']='no-store'
@@ -71,15 +91,24 @@ def install_portal_sessions(app, security, serialize, current):
     def refresh(request:Request,response:Response):
         trusted_origin(request)
         name,secure=cookie_settings(request)
-        token=_extract_token(request, name)
-        if not token:
+        tokens = _extract_tokens(request, name)
+        if not tokens:
             raise HTTPException(401, 'No active session or token to refresh.')
-        try:
-            user=security.current(token)
-            claims=security.tokens.read(token)
-            fresh_token=security.tokens.issue(user, "access", dev_session=claims.get("dev_session"))
-        except AuthenticationError as e:
-            raise HTTPException(401, str(e)) from None
+
+        user = None
+        claims = None
+        for tok in tokens:
+            try:
+                user = security.current_for_refresh(tok)
+                claims = security.tokens.read_for_refresh(tok)
+                break
+            except AuthenticationError:
+                continue
+
+        if not user or not claims:
+            raise HTTPException(401, 'No active session or token to refresh.')
+
+        fresh_token = security.tokens.issue(user, "access", dev_session=claims.get("dev_session"))
         max_age=get_max_age()
         response.set_cookie(name,fresh_token,max_age=max_age,httponly=True,secure=secure,samesite='strict',path='/')
         response.headers['Cache-Control']='no-store'

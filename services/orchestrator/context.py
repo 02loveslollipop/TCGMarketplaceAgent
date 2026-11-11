@@ -6,7 +6,12 @@ def planning_content(request, history, images):
     import json
     context=[]
     previous=[]
-    messages=[row for row in history if row["role"]=="user" or row["content"].get("type") not in {"thinking","tool","progress"}]
+    messages=[
+        row for row in history
+        if row["role"]=="user"
+        or row["content"].get("type") not in {"thinking","tool","progress"}
+        or (row["content"].get("type") == "thinking" and row["content"].get("data", {}).get("source") == "approach_summary")
+    ]
     for row in messages[-20:]:
         content=dict(row["content"])
         previous.extend(content.pop("images", []))
