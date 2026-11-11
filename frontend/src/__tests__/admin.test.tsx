@@ -144,3 +144,101 @@ it('maps execution statuses consistently for table and modal status indicators a
   }));
   expect(await screen.findByRole('dialog', {name: /Execution Details — First Deck/i})).toBeInTheDocument();
 });
+
+it('AdminActivity renders the run selector when thread_executions has 2 or more entries, and clicking another run loads that execution detail', async () => {
+  const { AdminActivity } = await import('../AdminActivity');
+  const user = userEvent.setup();
+
+  const run1Summary = {
+    id: 'exec-11111111-aaaa',
+    conversation_id: 'conv-multi',
+    conversation_title: 'Multi-turn Run',
+    user_id: 'u1',
+    model_id: 'gpt-6-luna',
+    status: 'failed',
+    created_at: '2026-11-10T00:00:00Z',
+  };
+  const run2Summary = {
+    id: 'exec-22222222-bbbb',
+    conversation_id: 'conv-multi',
+    conversation_title: 'Multi-turn Run',
+    user_id: 'u1',
+    model_id: 'mistral-medium-latest',
+    status: 'complete',
+    created_at: '2026-11-10T01:00:00Z',
+  };
+
+  const run1Detail = {
+    ...run1Summary,
+    checkpoint: {},
+    reasoning_summary: 'Run 1 reasoning',
+    events: [],
+    logs: [],
+    messages: [
+      { id: 'm1', role: 'user', content: { text: 'Prompt 1' }, created_at: '2026-11-10T00:00:00Z' },
+    ],
+    thread_executions: [run1Summary, run2Summary],
+  };
+
+  const run2Detail = {
+    ...run2Summary,
+    checkpoint: {},
+    reasoning_summary: 'Run 2 reasoning',
+    events: [],
+    logs: [],
+    messages: [
+      { id: 'm1', role: 'user', content: { text: 'Prompt 1' }, created_at: '2026-11-10T00:00:00Z' },
+      { id: 'm2', role: 'user', content: { text: 'Prompt 2' }, created_at: '2026-11-10T01:00:00Z' },
+    ],
+    thread_executions: [run1Summary, run2Summary],
+  };
+
+  vi.stubGlobal('fetch', vi.fn((path: string) => {
+    if (path.includes('/api/admin/activity/exec-22222222-bbbb')) {
+      return Promise.resolve(json(run2Detail));
+    }
+    if (path.includes('/api/admin/activity/exec-11111111-aaaa')) {
+      return Promise.resolve(json(run1Detail));
+    }
+    if (path.includes('/api/admin/activity')) {
+      return Promise.resolve(json([run1Summary]));
+    }
+    if (path.includes('/api/chat/models')) {
+      return Promise.resolve(json([
+        { id: 'gpt-6-luna', label: 'GPT 6 luna' },
+        { id: 'mistral-medium-latest', label: 'Mistral Medium' },
+      ]));
+    }
+    if (path.includes('/api/admin/legality/status')) {
+      return Promise.resolve(json({ status: 'synced', sets_count: 5 }));
+    }
+    return Promise.resolve(json({}));
+  }));
+
+  render(<AdminActivity token="admin-token" />);
+
+  // Switch to Agent Playground view
+  const playgroundButton = await screen.findByRole('button', { name: /Foundry Agentic Playground/i });
+  await user.click(playgroundButton);
+
+  // In the left sidebar thread list, click the conversation thread to select it
+  const threadCard = await screen.findByText('Multi-turn Run');
+  await user.click(threadCard);
+
+  // Verify run selector is rendered with both runs
+  const runSelector = await screen.findByTestId('run-selector');
+  const run1Button = within(runSelector).getAllByRole('button', { name: /exec-111/ })[0];
+  const run2Button = within(runSelector).getAllByRole('button', { name: /exec-222/ })[0];
+  expect(run1Button).toBeInTheDocument();
+  expect(run2Button).toBeInTheDocument();
+
+  // Click the second run option
+  await user.click(run2Button);
+
+  // Verify handleViewDetail was called for exec-22222222-bbbb and loaded run2 detail
+  await waitFor(() => {
+    const detailCall = vi.mocked(fetch).mock.calls.find((c) => String(c[0]).includes('exec-22222222-bbbb'));
+    expect(detailCall).toBeDefined();
+  });
+  expect(await screen.findByText('Prompt 2')).toBeInTheDocument();
+});

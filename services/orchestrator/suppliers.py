@@ -11,7 +11,7 @@ import httpx
 from pydantic import ValidationError
 
 from shared.contracts import CardRequest, Offer, Source, utcnow
-from services.orchestrator.budget import normalize_condition, normalize_printing
+from services.orchestrator.budget import card_number, normalize_condition, normalize_printing, normalized
 
 TCGPLAYER_ACTOR = "devcake~tcgplayer-data-scraper"
 TCGPLAYER_LISTINGS_ACTOR = "crawloop~tcgplayer-listings-scraper"
@@ -38,6 +38,20 @@ def cardmarket_input(card: CardRequest) -> dict:
 
 def decimal(value):
     return None if value is None else Decimal(str(value))
+
+
+def tcgdex_set_id(card_id: str, local_id) -> str:
+    """Return the set portion of a TCGdex id, tolerating hyphens in set ids.
+
+    TCGdex ids are ``<set-id>-<local-id>`` and some set ids themselves contain
+    hyphens (for example ``tk-bw-e-2`` belongs to set ``tk-bw-e``). Splitting on
+    the first hyphen would collapse every ``tk-*`` set to ``tk``.
+    """
+    local = str(local_id or "")
+    suffix = f"-{local}"
+    if local and card_id.endswith(suffix):
+        return card_id[: -len(suffix)]
+    return card_id.rsplit("-", 1)[0]
 
 
 def tcgplayer_offers(rows: list[dict]) -> list[Offer]:
@@ -308,20 +322,24 @@ class Suppliers:
             offers = self._offers_from_tcgdex_pricing(card.card_id, pricing, supplier, card, id_source)
 
         if not offers:
-            is_energy = card.basic_energy or card.name.strip().casefold().endswith(" energy")
             candidates = await self._fetch_tcgdex_by_name(card.name, lang)
             candidate_ids = []
             for item in candidates:
                 cand_id = item.get("id")
                 if not cand_id or cand_id == card.card_id:
                     continue
-                if is_energy:
+                if normalized(item.get("name")) != normalized(card.name):
+                    continue
+                if card.basic_energy is True:
                     candidate_ids.append(cand_id)
                 else:
-                    cand_local = str(item.get("localId", "")).lstrip("0")
-                    card_num = str(card.number or "").lstrip("0")
-                    if cand_local and card_num and cand_local == card_num:
-                        candidate_ids.append(cand_id)
+                    if card.card_id:
+                        card_set_id = tcgdex_set_id(card.card_id, card.number)
+                        cand_set_id = tcgdex_set_id(cand_id, item.get("localId"))
+                        cand_local = card_number(item.get("localId"))
+                        req_num = card_number(card.number)
+                        if cand_set_id == card_set_id and cand_local and req_num and cand_local == req_num:
+                            candidate_ids.append(cand_id)
 
             for cand_id in candidate_ids[:6]:
                 cand_data = await self._fetch_tcgdex(cand_id, lang)
@@ -333,6 +351,14 @@ class Suppliers:
                     cand_id_source = Source(url=f"https://api.tcgdex.net/v2/en/cards/{cand_id}", title=f"{card.name} #{card.number}")
                     cand_offers = self._offers_from_tcgdex_pricing(cand_id, cand_pricing, supplier, card, cand_id_source)
                     if cand_offers:
+                        if cand_id != card.card_id:
+                            for off in cand_offers:
+                                if off.source:
+                                    off.source = Source(
+                                        url=off.source.url,
+                                        title=f"{card.name} (priced from printing {cand_id}) — {supplier} via TCGdex",
+                                        retrieved_at=off.source.retrieved_at,
+                                    )
                         offers.extend(cand_offers)
                         break
 

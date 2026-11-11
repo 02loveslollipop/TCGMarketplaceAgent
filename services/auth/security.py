@@ -43,12 +43,19 @@ class Tokens:
     def __init__(self, public_key: str, private_key: str | None = None):
         self.public_key, self.private_key = public_key, private_key
 
-    def issue(self, user: User, kind="access", challenge_id=None, *, dev_session=None) -> str:
+    def issue(self, user: User, kind="access", challenge_id=None, *, dev_session=None, orig_iat: int | None = None) -> str:
         now = utcnow()
         access_ttl = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "480"))
         payload = {"sub":user.id, "iss":"pokemon-tcg-auth", "aud":"pokemon-tcg-poc",
                    "iat":now, "nbf":now, "exp":now + timedelta(minutes=access_ttl if kind == "access" else 5),
                    "jti":str(uuid4()), "type":kind, "version":user.token_version}
+        if kind == "access":
+            if orig_iat is None:
+                payload["orig_iat"] = int(now.timestamp())
+            elif isinstance(orig_iat, datetime):
+                payload["orig_iat"] = int(orig_iat.timestamp())
+            else:
+                payload["orig_iat"] = int(orig_iat)
         if challenge_id:
             payload["challenge_id"] = challenge_id
         if dev_session is not None:
@@ -66,9 +73,23 @@ class Tokens:
         except jwt.InvalidTokenError as error:
             raise AuthenticationError("Invalid or expired token.") from error
 
-    def read_for_refresh(self, token: str, kind="access", max_grace_seconds: int = 86400) -> dict:
+    def read_for_refresh(self, token: str, kind="access", max_grace_seconds: int | None = None) -> dict:
+        if max_grace_seconds is None:
+            try:
+                max_grace_seconds = int(os.getenv("REFRESH_GRACE_SECONDS", "86400"))
+            except Exception:
+                max_grace_seconds = 86400
+
         try:
-            return self.read(token, kind)
+            max_session_hours = int(os.getenv("MAX_SESSION_HOURS", "168"))
+        except Exception:
+            max_session_hours = 168
+        max_session_seconds = max_session_hours * 3600
+
+        now_ts = int(time.time())
+        claims = None
+        try:
+            claims = self.read(token, kind)
         except AuthenticationError:
             try:
                 claims = jwt.decode(
@@ -83,11 +104,18 @@ class Tokens:
                 raise AuthenticationError("Token has incorrect purpose.")
 
             exp = claims.get("exp", 0)
-            now_ts = int(time.time())
             if now_ts - exp > max_grace_seconds:
                 raise AuthenticationError("Token expired beyond refresh grace period.")
 
-            return claims
+        orig_iat = claims.get("orig_iat")
+        if orig_iat is None:
+            orig_iat = claims.get("iat", 0)
+        orig_iat_ts = int(orig_iat)
+
+        if now_ts - orig_iat_ts > max_session_seconds:
+            raise AuthenticationError("Session has exceeded maximum allowed duration.")
+
+        return claims
 
 
 def aware(value: datetime) -> datetime:
@@ -119,7 +147,7 @@ class Security:
                 self.enrollment_parent(session,user,claims.get("challenge_id"))
         return user
 
-    def current_for_refresh(self, token: str, kind="access", max_grace_seconds: int = 86400) -> User:
+    def current_for_refresh(self, token: str, kind="access", max_grace_seconds: int | None = None) -> User:
         claims = self.tokens.read_for_refresh(token, kind, max_grace_seconds)
         user = self.repo.user(user_id=claims["sub"])
         if not user or not user.active or user.token_version != claims["version"]:

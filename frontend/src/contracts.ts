@@ -53,6 +53,13 @@ export interface AdminExecutionSummary {
   created_at: string;
 }
 
+export interface AdminThreadExecution {
+  id: string;
+  model_id: string;
+  status: string;
+  created_at: string;
+}
+
 export interface AdminExecutionDetail {
   id: string;
   conversation_id: string;
@@ -66,6 +73,6 @@ export interface AdminExecutionDetail {
   events: { id: string; kind: string; payload: any; created_at: string }[];
   logs?: { id: string; action: string; details: any; created_at: string }[];
   messages?: { id: string; role: string; content: any; created_at: string }[];
-  thread_executions?: AdminExecutionSummary[];
+  thread_executions?: AdminThreadExecution[];
 }
 

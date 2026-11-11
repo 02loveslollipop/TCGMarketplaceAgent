@@ -304,10 +304,10 @@ async def test_basic_energy_fallback_candidates():
             }
         }
     }
-    # Name lookup returns candidates
+    # Name lookup returns candidates: exact name match is used
     suppliers._tcgdex_cache["name:en:fighting energy"] = [
         {"id": "mee-006", "name": "Fighting Energy", "localId": "006"},
-        {"id": "sve-006", "name": "Basic Fighting Energy", "localId": "006"},
+        {"id": "sve-006", "name": "Fighting Energy", "localId": "006"},
     ]
 
     card = CardRequest(
@@ -327,7 +327,196 @@ async def test_basic_energy_fallback_candidates():
     assert tcg_offers[0].supplier == "TCGplayer"
     assert tcg_offers[0].set_name == "MEE"
     assert tcg_offers[0].number == "006"
+    assert "priced from printing sve-006" in tcg_offers[0].source.title
     assert equivalent(card, tcg_offers[0]) is True
+
+
+@pytest.mark.asyncio
+async def test_tcgdex_different_name_and_special_energy_rejected(monkeypatch):
+    from services.orchestrator.suppliers import SupplierError
+
+    monkeypatch.setenv("APIFY_LIVE_SCRAPE", "false")
+    suppliers = Suppliers(api_key="test-key")
+    suppliers._tcgdex_cache["en:mee-006"] = {"pricing": {}}
+    suppliers._tcgdex_cache["en:rainbow-001"] = {
+        "pricing": {
+            "tcgplayer": {
+                "unit": "USD",
+                "normal": {"lowPrice": 2.50, "marketPrice": 3.00},
+            }
+        }
+    }
+    # "Fighting Energy" candidate has different name "Rainbow Fighting Energy"
+    suppliers._tcgdex_cache["name:en:fighting energy"] = [
+        {"id": "mee-006", "name": "Fighting Energy", "localId": "006"},
+        {"id": "rainbow-001", "name": "Rainbow Fighting Energy", "localId": "001"},
+    ]
+
+    basic_card = CardRequest(
+        card_id="mee-006",
+        name="Fighting Energy",
+        set_name="MEE",
+        number="006",
+        condition="Near Mint",
+        language="English",
+        printing="any",
+        basic_energy=True,
+        quantity=4,
+    )
+    # Must reject Rainbow Fighting Energy candidate and raise SupplierError
+    with pytest.raises(SupplierError, match="No verified TCGplayer offers"):
+        await suppliers.quote("TCGplayer", basic_card)
+
+    # Non-basic "X Energy" (Double Turbo Energy) must not get price from another card
+    suppliers._tcgdex_cache["en:dte-001"] = {"pricing": {}}
+    suppliers._tcgdex_cache["en:dte-002"] = {
+        "pricing": {
+            "tcgplayer": {
+                "unit": "USD",
+                "normal": {"lowPrice": 1.00, "marketPrice": 1.25},
+            }
+        }
+    }
+    suppliers._tcgdex_cache["name:en:double turbo energy"] = [
+        {"id": "dte-001", "name": "Double Turbo Energy", "localId": "001"},
+        {"id": "dte-002", "name": "Double Turbo Energy", "localId": "002"},
+    ]
+    special_energy = CardRequest(
+        card_id="dte-001",
+        name="Double Turbo Energy",
+        set_name="Brilliant Stars",
+        number="001",
+        condition="Near Mint",
+        language="English",
+        printing="any",
+        basic_energy=False,
+        quantity=4,
+    )
+    with pytest.raises(SupplierError, match="No verified TCGplayer offers"):
+        await suppliers.quote("TCGplayer", special_energy)
+
+
+@pytest.mark.asyncio
+async def test_tcgdex_non_energy_card_no_borrowing_raises_supplier_error(monkeypatch):
+    from services.orchestrator.suppliers import SupplierError
+
+    monkeypatch.setenv("APIFY_LIVE_SCRAPE", "false")
+    suppliers = Suppliers(api_key="test-key")
+    suppliers._tcgdex_cache["en:swsh1-025"] = {"pricing": {}}
+    suppliers._tcgdex_cache["en:sv1-025"] = {
+        "pricing": {
+            "tcgplayer": {
+                "unit": "USD",
+                "normal": {"lowPrice": 5.00, "marketPrice": 6.00},
+            }
+        }
+    }
+    suppliers._tcgdex_cache["name:en:pikachu"] = [
+        {"id": "swsh1-025", "name": "Pikachu", "localId": "025"},
+        {"id": "sv1-025", "name": "Pikachu", "localId": "025"},
+    ]
+    card = CardRequest(
+        card_id="swsh1-025",
+        name="Pikachu",
+        set_name="Sword & Shield",
+        number="025",
+        condition="Near Mint",
+        language="English",
+        printing="any",
+        basic_energy=False,
+        quantity=2,
+    )
+    with pytest.raises(SupplierError, match="No verified TCGplayer offers"):
+        await suppliers.quote("TCGplayer", card)
+
+
+def test_tcgdex_set_id_handles_hyphenated_sets():
+    from services.orchestrator.suppliers import tcgdex_set_id
+
+    assert tcgdex_set_id("tk-bw-e-2", "2") == "tk-bw-e"
+    assert tcgdex_set_id("tk-xy-latio-2", "2") == "tk-xy-latio"
+    assert tcgdex_set_id("swsh12.5-157", "157") == "swsh12.5"
+    assert tcgdex_set_id("sv1-025", "025") == "sv1"
+
+
+@pytest.mark.asyncio
+async def test_tcgdex_non_energy_hyphenated_sets_are_not_conflated(monkeypatch):
+    from services.orchestrator.suppliers import SupplierError
+
+    monkeypatch.setenv("APIFY_LIVE_SCRAPE", "false")
+    suppliers = Suppliers(api_key="test-key")
+    suppliers._tcgdex_cache["en:tk-bw-e-2"] = {"pricing": {}}
+    suppliers._tcgdex_cache["en:tk-xy-latio-2"] = {
+        "pricing": {"tcgplayer": {"unit": "USD", "normal": {"lowPrice": 3.00}}}
+    }
+    suppliers._tcgdex_cache["name:en:pikachu"] = [
+        {"id": "tk-bw-e-2", "name": "Pikachu", "localId": "2"},
+        {"id": "tk-xy-latio-2", "name": "Pikachu", "localId": "2"},
+    ]
+    card = CardRequest(
+        card_id="tk-bw-e-2",
+        name="Pikachu",
+        set_name="TK BW E",
+        number="2",
+        condition="Near Mint",
+        language="English",
+        printing="any",
+        basic_energy=False,
+        quantity=2,
+    )
+    with pytest.raises(SupplierError, match="No verified TCGplayer offers"):
+        await suppliers.quote("TCGplayer", card)
+
+
+def test_planner_only_marks_normal_energy_as_basic():
+    """Special Energy must not inherit the basic-energy cross-printing permission."""
+    from unittest.mock import MagicMock
+    from services.orchestrator.research import Research
+
+    research = Research()
+    research.cards["swsh9-151"] = {
+        "id": "swsh9-151",
+        "name": "Double Turbo Energy",
+        "localId": "151",
+        "category": "Energy",
+        "energyType": "Special",
+        "set": {"id": "swsh9", "name": "Brilliant Stars", "tcgOnline": "BRS"},
+        "legal": {"standard": True, "expanded": True},
+    }
+    research.cards["sve-006"] = {
+        "id": "sve-006",
+        "name": "Fighting Energy",
+        "localId": "006",
+        "category": "Energy",
+        "energyType": "Normal",
+        "set": {"id": "sve", "name": "Scarlet & Violet Energies", "tcgOnline": "SVE"},
+        "legal": {"standard": True, "expanded": True},
+    }
+    planner = Planner(MagicMock(), research)
+
+    def validated(card_id, name, set_name, number):
+        return planner.validate(AgentPlan(
+            format="expanded",
+            ruleset="international",
+            cards=[CardRequest(
+                card_id=card_id,
+                name=name,
+                quantity=4,
+                set_name=set_name,
+                number=number,
+                condition="Near Mint",
+                language="English",
+                printing="any",
+            )],
+        ))
+
+    special = validated("swsh9-151", "Double Turbo Energy", "Brilliant Stars", "151")
+    assert special.question is None
+    assert special.cards[0].basic_energy is False
+
+    basic = validated("sve-006", "Fighting Energy", "Scarlet & Violet Energies", "006")
+    assert basic.question is None
+    assert basic.cards[0].basic_energy is True
 
 
 def test_tokens_read_for_refresh_grace_period():
@@ -397,4 +586,84 @@ def test_context_preserves_approach_summary():
     types = [c["content"].get("type") for c in conv if "type" in c["content"]]
     assert types == ["thinking"]
     assert conv[1]["content"]["data"]["source"] == "approach_summary"
+
+
+def test_sliding_session_lifetime_cap(repo, monkeypatch):
+    import time, jwt
+    from fastapi.testclient import TestClient
+    from cryptography.hazmat.primitives.asymmetric import rsa
+    from cryptography.hazmat.primitives import serialization
+    from cryptography.fernet import Fernet
+    from services.auth.security import Security, Tokens, hash_password, AuthenticationError
+    from services.auth.app import create_app
+
+    # Set MAX_SESSION_HOURS to 2 hours
+    monkeypatch.setenv("MAX_SESSION_HOURS", "2")
+    monkeypatch.setenv("REFRESH_GRACE_SECONDS", "3600")
+
+    key = rsa.generate_private_key(public_exponent=65537, key_size=2048)
+    priv_pem = key.private_bytes(serialization.Encoding.PEM, serialization.PrivateFormat.PKCS8, serialization.NoEncryption()).decode("utf-8")
+    pub_pem = key.public_key().public_bytes(serialization.Encoding.PEM, serialization.PublicFormat.SubjectPublicKeyInfo).decode("utf-8")
+
+    sec = Security(repo, Tokens(pub_pem, priv_pem), Fernet.generate_key(), local_password_only=False)
+    hashed = hash_password("test-password-long")
+    user = repo.add_user("cap_user", hashed)
+    import pyotp
+    secret_str = pyotp.random_base32()
+    enc_secret = sec.cipher.encrypt(secret_str.encode()).decode()
+    repo.update_user(user.id, totp_secret=enc_secret)
+    user = repo.user(user_id=user.id)
+
+    app = create_app(repo, sec)
+    client = TestClient(app)
+
+    now = int(time.time())
+
+    # 1. Fresh access token has orig_iat claim
+    token = sec.tokens.issue(user, "access")
+    claims = sec.tokens.read(token)
+    assert "orig_iat" in claims
+    initial_orig_iat = claims["orig_iat"]
+    assert abs(initial_orig_iat - now) <= 5
+
+    # 2. POST /refresh returns a refreshed token keeping the original orig_iat
+    headers = {"Authorization": f"Bearer {token}"}
+    resp = client.post("/refresh", headers=headers)
+    assert resp.status_code == 200
+    refreshed_tok = resp.json()["access_token"]
+    ref_claims = sec.tokens.read(refreshed_tok)
+    assert ref_claims["orig_iat"] == initial_orig_iat
+
+    # 3. GET /portal-session returns a refreshed token keeping the original orig_iat
+    resp_portal = client.get("/portal-session", headers=headers)
+    assert resp_portal.status_code == 200
+    portal_tok = resp_portal.json()["access_token"]
+    portal_claims = sec.tokens.read(portal_tok)
+    assert portal_claims["orig_iat"] == initial_orig_iat
+
+    # 4. Token past MAX_SESSION_HOURS (2 hours = 7200s) since orig_iat is rejected
+    stale_payload = {
+        "sub": user.id, "iss": "pokemon-tcg-auth", "aud": "pokemon-tcg-poc",
+        "iat": now - 100, "nbf": now - 100, "exp": now + 3600,
+        "jti": "stale-jti", "type": "access", "version": user.token_version,
+        "orig_iat": now - 7300,  # 7300s > 7200s (2 hours)
+    }
+    stale_token = jwt.encode(stale_payload, priv_pem, algorithm="RS256")
+    stale_headers = {"Authorization": f"Bearer {stale_token}"}
+
+    with pytest.raises(AuthenticationError, match="maximum allowed duration"):
+        sec.tokens.read_for_refresh(stale_token)
+
+    client.cookies.clear()
+    assert client.post("/refresh", headers=stale_headers).status_code == 401
+    assert client.get("/portal-session", headers=stale_headers).status_code == 401
+
+    # 5. A logged-out token (incremented token_version) is still rejected
+    client.cookies.clear()
+    valid_token = sec.tokens.issue(user, "access")
+    repo.update_user(user.id, token_version=user.token_version + 1)
+    revoked_headers = {"Authorization": f"Bearer {valid_token}"}
+    assert client.post("/refresh", headers=revoked_headers).status_code == 401
+    assert client.get("/portal-session", headers=revoked_headers).status_code == 401
+
 

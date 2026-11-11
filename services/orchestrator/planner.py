@@ -235,8 +235,13 @@ class Planner:
 
             image = metadata.get("image")
             card.image_url = f"{image}/high.webp" if image else None
-            card.basic_energy = metadata.get("category") == "Energy" and (
-                metadata.get("energyType") == "Normal" or _norm_card_name(card.name).endswith(" energy")
+            # Basic (cross-printable) energy is determined solely by catalogue
+            # metadata. A name ending in " energy" also matches Special Energy
+            # (e.g. "Double Turbo Energy"), which must never be priced from a
+            # different printing.
+            card.basic_energy = (
+                metadata.get("category") == "Energy"
+                and normalized(metadata.get("energyType")) == "normal"
             )
 
             norm_cond = normalized(card.condition)

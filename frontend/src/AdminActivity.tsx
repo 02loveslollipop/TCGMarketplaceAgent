@@ -241,9 +241,11 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
   }));
 
   const activeConversationId = playgroundThreadId || selectedExecution?.conversation_id;
-  const threadExecutions = executions.filter(
-    (e) => activeConversationId && e.conversation_id === activeConversationId
-  );
+  const threadExecutions = (selectedExecution?.thread_executions && selectedExecution.thread_executions.length > 0)
+    ? selectedExecution.thread_executions
+    : executions.filter(
+        (e) => activeConversationId && e.conversation_id === activeConversationId
+      );
 
   const transcriptGroups: Array<{
     type: 'user' | 'trace' | 'single';
@@ -515,26 +517,21 @@ export const AdminActivity: React.FC<AdminActivityProps> = ({ token }) => {
                 actions={
                   <SpaceBetween direction="horizontal" size="xs">
                     {threadExecutions.length > 1 && (
-                      <Select
-                        selectedOption={
-                          selectedExecution
-                            ? {
-                                value: selectedExecution.id,
-                                label: `Run ${selectedExecution.id.slice(0, 8)}... (${selectedExecution.status})`,
-                              }
-                            : null
-                        }
-                        onChange={({ detail }) => {
-                          if (detail.selectedOption.value) {
-                            void handleViewDetail(detail.selectedOption.value);
-                          }
-                        }}
-                        options={threadExecutions.map((e) => ({
-                          value: e.id,
-                          label: `Run ${e.id.slice(0, 8)}... (${e.status})`,
-                        }))}
-                        placeholder="Select run"
-                      />
+                      <div data-testid="run-selector">
+                        <SegmentedControl
+                          selectedId={selectedExecution?.id || ''}
+                          onChange={({ detail }) => {
+                            if (detail.selectedId) {
+                              void handleViewDetail(detail.selectedId);
+                            }
+                          }}
+                          options={threadExecutions.map((e) => ({
+                            id: e.id,
+                            text: `${e.id.slice(0, 8)} (${e.status}, ${e.model_id})`,
+                          }))}
+                          label="Select execution run"
+                        />
+                      </div>
                     )}
                     <Select
                       selectedOption={

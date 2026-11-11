@@ -17,6 +17,29 @@ def test_only_dedicated_schema_and_explicit_service_grants():
     assert not any("DEFAULT PRIVILEGES" in value for value in rendered)
 
 
+def test_runtime_files_writes_session_limit_defaults(tmp_path, monkeypatch):
+    from dotenv import dotenv_values
+    from scripts.provision import runtime_files
+
+    monkeypatch.chdir(tmp_path)
+    passwords = dict.fromkeys(SERVICE_TABLES, "test-only-password")
+    admin_info = {"host": "localhost", "port": "5432", "dbname": "testdb"}
+
+    runtime_files(
+        {"MAX_SESSION_HOURS": "24", "REFRESH_GRACE_SECONDS": "60"},
+        passwords,
+        admin_info,
+    )
+    auth_env = dotenv_values(tmp_path / ".runtime" / "auth.env")
+    assert auth_env.get("MAX_SESSION_HOURS") == "24"
+    assert auth_env.get("REFRESH_GRACE_SECONDS") == "60"
+
+    runtime_files({}, passwords, admin_info)
+    auth_env = dotenv_values(tmp_path / ".runtime" / "auth.env")
+    assert auth_env.get("MAX_SESSION_HOURS") == "168"
+    assert auth_env.get("REFRESH_GRACE_SECONDS") == "86400"
+
+
 def test_offer_rejects_negative_price_and_unknown_fields():
     with pytest.raises(ValidationError):
         Offer(id="x", name="x", supplier="TCGplayer", price=-1, currency="USD", price_kind="listing", source={"url":"https://example.com", "title":"test"})

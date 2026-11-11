@@ -80,7 +80,8 @@ def install_portal_sessions(app, security, serialize, current):
             response.headers['Cache-Control']='no-store'
             return {'error':{'message':'No active portal session.'}}
 
-        fresh_token = security.tokens.issue(user, "access", dev_session=claims.get("dev_session"))
+        orig_iat = claims.get("orig_iat") if claims.get("orig_iat") is not None else claims.get("iat")
+        fresh_token = security.tokens.issue(user, "access", dev_session=claims.get("dev_session"), orig_iat=orig_iat)
         max_age=get_max_age()
         response.set_cookie(name,fresh_token,max_age=max_age,httponly=True,secure=secure,samesite='strict',path='/')
         response.headers['Cache-Control']='no-store'
@@ -108,7 +109,8 @@ def install_portal_sessions(app, security, serialize, current):
         if not user or not claims:
             raise HTTPException(401, 'No active session or token to refresh.')
 
-        fresh_token = security.tokens.issue(user, "access", dev_session=claims.get("dev_session"))
+        orig_iat = claims.get("orig_iat") if claims.get("orig_iat") is not None else claims.get("iat")
+        fresh_token = security.tokens.issue(user, "access", dev_session=claims.get("dev_session"), orig_iat=orig_iat)
         max_age=get_max_age()
         response.set_cookie(name,fresh_token,max_age=max_age,httponly=True,secure=secure,samesite='strict',path='/')
         response.headers['Cache-Control']='no-store'

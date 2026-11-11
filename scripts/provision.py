@@ -81,7 +81,12 @@ def runtime_files(values: dict, passwords: dict, admin_info: dict):
         lines = [f"DATABASE_DSN={dsn}", f"SERVICE_NAME={service}"]
         if service == "auth":
             lines.extend(["JWT_PRIVATE_KEY_FILE=/run/secrets/jwt_private", "TOTP_KEY_FILE=/run/secrets/totp_key"])
-            for name, default in (("WEBAUTHN_RP_ID","localhost"),("WEBAUTHN_ORIGIN","http://localhost:8080")):
+            for name, default in (
+                ("WEBAUTHN_RP_ID", "localhost"),
+                ("WEBAUTHN_ORIGIN", "http://localhost:8080"),
+                ("MAX_SESSION_HOURS", "168"),
+                ("REFRESH_GRACE_SECONDS", "86400"),
+            ):
                 value=str(values.get(name) or default)
                 if "\n" in value or "\r" in value:
                     raise ValueError(f"Invalid multiline value for {name}")
