@@ -83,7 +83,7 @@ it('ThinkingTrace displays Completed thinking when a tool has an error but think
     {
       id: 'tool-err',
       type: 'tool',
-      created_at: new Date().toISOString(),
+      at: new Date().toISOString(),
       data: {
         id: 't-err',
         name: 'quote_supplier',
@@ -95,7 +95,7 @@ it('ThinkingTrace displays Completed thinking when a tool has an error but think
     {
       id: 'think-ok',
       type: 'thinking',
-      created_at: new Date().toISOString(),
+      at: new Date().toISOString(),
       data: {
         id: 'th-ok',
         status: 'complete',
