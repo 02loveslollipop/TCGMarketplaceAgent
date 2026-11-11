@@ -31,11 +31,26 @@ CONDITIONS = {"near mint":"nm", "nm":"nm", "mint":"mint", "excellent":"ex", "ex"
               "lightly played":"lp", "lp":"lp", "good":"gd", "gd":"gd"}
 
 
+def normalize_condition(val: str | None) -> str:
+    text = normalized(val)
+    if text in {"", "any", "not applicable", "na", "n a", "none", "unverified", "default", "standard", "expanded"} or text.startswith("not applicable"):
+        return "any"
+    return CONDITIONS.get(text, text)
+
+
+def normalize_printing(val: str | None) -> str:
+    text = normalized(val)
+    if text in {"", "any", "not applicable", "na", "n a", "none", "unverified", "default", "standard", "expanded", "regular", "standard printing"} or text.startswith("not applicable"):
+        return "any"
+    return text
+
+
 def request_identity(card: CardRequest) -> tuple[str, ...]:
     """Use the same normalized variant restrictions for merging and coverage."""
-    condition = normalized(card.condition)
+    condition = normalize_condition(card.condition)
+    printing = normalize_printing(card.printing)
     return (normalized(card.name), normalized(card.set_name), card_number(card.number),
-            CONDITIONS.get(condition, condition), normalized(card.language), normalized(card.printing))
+            condition, normalized(card.language), printing)
 
 
 def request_details(card: CardRequest) -> dict:
@@ -47,14 +62,19 @@ def equivalent(card: CardRequest, offer: Offer) -> bool:
     if offer.price_kind != "listing" or offer.availability != "in_stock" or not offer.quantity:
         return False
     for field in ("name", "set_name", "number", "language", "printing", "condition"):
-        normalize = card_number if field == "number" else normalized
-        requested, found = normalize(getattr(card, field)), normalize(getattr(offer, field))
-        if not found and field == "printing" and requested == "any":
+        if field == "number":
+            requested, found = card_number(getattr(card, field)), card_number(getattr(offer, field))
+        elif field == "condition":
+            requested, found = normalize_condition(getattr(card, field)), normalize_condition(getattr(offer, field))
+        elif field == "printing":
+            requested, found = normalize_printing(getattr(card, field)), normalize_printing(getattr(offer, field))
+        else:
+            requested, found = normalized(getattr(card, field)), normalized(getattr(offer, field))
+
+        if not found and field in {"printing", "condition"} and requested == "any":
             continue
         if not found:
             return False
-        if field == "condition":
-            requested, found = CONDITIONS.get(requested, requested), CONDITIONS.get(found, found)
         if requested != "any" and requested != found:
             return False
     return True

@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import time
 import secrets
+import os
 from uuid import uuid4
 
 from argon2 import PasswordHasher, Type
@@ -44,8 +45,9 @@ class Tokens:
 
     def issue(self, user: User, kind="access", challenge_id=None, *, dev_session=None) -> str:
         now = utcnow()
+        access_ttl = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "480"))
         payload = {"sub":user.id, "iss":"pokemon-tcg-auth", "aud":"pokemon-tcg-poc",
-                   "iat":now, "nbf":now, "exp":now + timedelta(minutes=15 if kind == "access" else 5),
+                   "iat":now, "nbf":now, "exp":now + timedelta(minutes=access_ttl if kind == "access" else 5),
                    "jti":str(uuid4()), "type":kind, "version":user.token_version}
         if challenge_id:
             payload["challenge_id"] = challenge_id

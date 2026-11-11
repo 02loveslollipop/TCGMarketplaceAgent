@@ -28,6 +28,7 @@ set names, local numbers, images or source URLs. Verify every selected printing 
 get_cards batch tool for full decks (up to 60 IDs in one call). Use exact returned
 name, set.name and localId. Never use market prices as offers.
 Use 'any' as a preference only when the user explicitly permits that flexibility.
+When the user asks for a deck without specifying card condition or foil finish, set `condition='Near Mint'` (or `'any'`) and `printing='any'`. Never put 'Not applicable' or format names in condition or printing.
 Cardmarket product URLs must be retrieved from search/page evidence, never built as slugs.
 Report missing or inaccessible sources honestly.
 
@@ -95,6 +96,14 @@ class Planner:
         plan = self.validate(plan, preferences=preferences)
         if plan.explanation:
             event_writer()({"type": "thinking", "data": {"id": uuid.uuid4().hex, "status": "complete", "source": "approach_summary", "summary": plan.explanation[:6000]}})
+        else:
+            if plan.question:
+                summary_text = f"Requested clarification: {plan.question}"
+            elif plan.cards:
+                summary_text = f"Resolved {sum(c.quantity for c in plan.cards)} cards across {len(plan.cards)} unique printings."
+            else:
+                summary_text = "Completed deck planning and card validation."
+            event_writer()({"type": "thinking", "data": {"id": uuid.uuid4().hex, "status": "complete", "source": "approach_summary", "summary": summary_text}})
         return plan
 
     async def _ensure_cards_loaded(self, plan: AgentPlan) -> None:
@@ -229,6 +238,19 @@ class Planner:
             card.basic_energy = metadata.get("category") == "Energy" and (
                 metadata.get("energyType") == "Normal" or _norm_card_name(card.name).endswith(" energy")
             )
+
+            norm_cond = normalized(card.condition)
+            if norm_cond in {"", "not applicable", "na", "n a", "none", "unverified", "default", "standard", "expanded"} or norm_cond.startswith("not applicable"):
+                card.condition = "Near Mint"
+
+            norm_print = normalized(card.printing)
+            if norm_print in {"", "not applicable", "na", "n a", "none", "unverified", "default", "standard", "expanded", "regular", "standard printing"} or norm_print.startswith("not applicable"):
+                card.printing = "any"
+
+            norm_lang = normalized(card.language)
+            if norm_lang in {"", "not applicable", "na", "auto"}:
+                card.language = "Japanese" if (plan.ruleset or "").lower() == "japan" else "English"
+
             card.cardmarket_identity_source = None
             if card.cardmarket_url:
                 evidence = self.research.sources.get(str(card.cardmarket_url))

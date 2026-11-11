@@ -9,7 +9,7 @@ import {TotpSettings} from './TotpSettings';
 import {WebAuthnSettings} from './WebAuthn';
 import {RecoverySettings} from './Recovery';
 import {Preferences} from './Preferences';
-import {api,redirectToChat} from './client';
+import {api,redirectToChat,registerTokenRefresher,setLatestToken} from './client';
 import type {Session} from './contracts';
 import type {AppLayoutProps} from '@cloudscape-design/components';
 import {ArtifactContent,artifactTitle,type ChatArtifact} from './ChatArtifacts';
@@ -35,8 +35,67 @@ export function Shell({admin=false}:{admin?:boolean}) {
     window.addEventListener('hashchange',navigate);return ()=>window.removeEventListener('hashchange',navigate);
   },[admin,user]);
   useEffect(()=>{
+    registerTokenRefresher(async () => {
+      try {
+        const res = await api<{ access_token: string; user?: Session; session?: Session }>('/api/auth/portal-session', '', { method: 'GET' });
+        if (res?.access_token) {
+          setToken(res.access_token);
+          setLatestToken(res.access_token);
+          const s = res.session || res.user;
+          if (s?.id) setUser(s);
+          return res.access_token;
+        }
+      } catch {
+        // ignore
+      }
+      return null;
+    });
+  },[]);
+  useEffect(()=>{
+    setLatestToken(token);
+    if (!token) return;
+    const interval = setInterval(() => {
+      void api<{ access_token: string; user?: Session; session?: Session }>('/api/auth/portal-session', '', { method: 'GET' })
+        .then(res => {
+          if (res?.access_token) {
+            setToken(res.access_token);
+            setLatestToken(res.access_token);
+            const s = res.session || res.user;
+            if (s?.id) setUser(s);
+          }
+        })
+        .catch(() => {});
+    }, 10 * 60 * 1000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') {
+        void api<{ access_token: string; user?: Session; session?: Session }>('/api/auth/portal-session', '', { method: 'GET' })
+          .then(res => {
+            if (res?.access_token) {
+              setToken(res.access_token);
+              setLatestToken(res.access_token);
+              const s = res.session || res.user;
+              if (s?.id) setUser(s);
+            }
+          })
+          .catch(() => {});
+      }
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    return () => {
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+    };
+  },[token]);
+  useEffect(()=>{
     let active=true;
-    void api<{access_token:string;user:Session}>('/api/auth/portal-session','').then(result=>{if(active&&result?.access_token&&result.user?.id){setToken(result.access_token);setUser(result.user);}}).catch(()=>{}).finally(()=>{if(active)setCheckingSession(false);});
+    void api<{access_token:string;user:Session;session:Session}>('/api/auth/portal-session','').then(result=>{
+      if(active&&result?.access_token){
+        setToken(result.access_token);
+        setLatestToken(result.access_token);
+        const s = result.session || result.user;
+        if (s?.id) setUser(s);
+      }
+    }).catch(()=>{}).finally(()=>{if(active)setCheckingSession(false);});
     return ()=>{active=false;};
   },[]);
   useEffect(()=>{if(admin&&user&&user.role!=='admin')redirectToChat();},[admin,user]);

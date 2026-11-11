@@ -57,15 +57,19 @@ class GuardedModel:
         policies=RolePolicies(self.repo)
         ticket=policies.begin_call(principal.id,principal.role,self.policy.id)
         async def invoke_and_account():
-            callback=TokenUsageCallback();rejected=False
+            callback = TokenUsageCallback()
+            reasoning_cb = ReasoningSummaryCallback()
+            rejected = False
             try:
-                result=await self.runnable.ainvoke(messages,config={"callbacks":[callback,ReasoningSummaryCallback()]})
-                if callback.usage is None:callback.capture(result)
+                result = await self.runnable.ainvoke(messages, config={"callbacks": [callback, reasoning_cb]})
+                if callback.usage is None:
+                    callback.capture(result)
             except BaseException as error:
-                rejected=getattr(error,"status_code",None) in {400,401,403,404,413,422,429}
+                rejected = getattr(error, "status_code", None) in {400, 401, 403, 404, 413, 422, 429}
                 raise
             finally:
-                policies.finish_call(principal.id,ticket,callback.usage,rejected=rejected)
+                reasoning_cb.flush()
+                policies.finish_call(principal.id, ticket, callback.usage, rejected=rejected)
             if callback.usage is None:
                 raise PolicyError("The provider did not report token usage. Further model calls are blocked until the daily reset.")
             return result

@@ -146,8 +146,10 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
                         event = pending.result()
                     except StopAsyncIteration:
                         break
-                    if event["type"] in {"result","question"} or event["type"] in {"thinking","tool"} and event["data"].get("status") != "loading":
-                        repo.add_message(execution.conversation_id,user.id,"assistant",{**event,"execution_id":execution.id})
+                    if event["type"] in {"result", "question", "cards"} or (
+                        event["type"] in {"thinking", "tool"} and event["data"].get("status") != "loading"
+                    ):
+                        repo.add_message(execution.conversation_id, user.id, "assistant", {**event, "execution_id": execution.id})
                     yield f"event: {event['type']}\ndata: {json.dumps(event['data'])}\n\n"
             except asyncio.CancelledError:
                 repo.checkpoint(execution.id,user.id,{"reason":"client disconnected"},"cancelled")
@@ -200,7 +202,7 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
         policy = await allowed(execution.model_id,user)
         if not repo.claim_execution(execution_id,user.id):
             raise HTTPException(409,"Execution is already being resumed.")
-        repo.add_message(execution.conversation_id,user.id,"user",{"decision":body.model_dump()})
+        repo.add_message(execution.conversation_id, user.id, "user", {"decision": body.model_dump(), "execution_id": execution.id})
         return stream_response(request,execution,user,agent_factory(policy),decision=body)
 
     return app

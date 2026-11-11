@@ -45,22 +45,43 @@ def summaries(message):
 
 
 class ReasoningSummaryCallback(BaseCallbackHandler):
-    run_inline=True
+    run_inline = True
     def __init__(self):
-        self.writer=event_writer();self.id=uuid.uuid4().hex;self.text="";self.closed=False;self.last_emit=0.0
-    def publish(self,status):
-        if status=="loading" and time.monotonic()-self.last_emit < 0.15:return
+        self.writer = event_writer()
+        self.id = uuid.uuid4().hex
+        self.text = ""
+        self.closed = False
+        self.completed = False
+        self.last_emit = 0.0
+
+    def publish(self, status):
+        if status == "loading" and time.monotonic() - self.last_emit < 0.15:
+            return
         if self.text and not self.closed:
-            self.last_emit=time.monotonic()
-            self.writer({"type":"thinking","data":{"id":self.id,"status":status,"source":"provider_summary","summary":self.text}})
-            if status!="loading":self.closed=True
-    def on_llm_new_token(self,token,*,chunk=None,**kwargs):
-        delta=summaries(getattr(chunk,"message",None))
+            self.last_emit = time.monotonic()
+            self.writer({"type": "thinking", "data": {"id": self.id, "status": status, "source": "provider_summary", "summary": self.text}})
+            if status != "loading":
+                self.closed = True
+
+    def on_llm_new_token(self, token, *, chunk=None, **kwargs):
+        delta = summaries(getattr(chunk, "message", None))
         if delta:
-            self.text=(self.text+delta)[:12000];self.publish("loading")
-    def on_llm_end(self,response,**kwargs):
+            self.text = (self.text + delta)[:12000]
+            self.publish("loading")
+
+    def on_llm_end(self, response, **kwargs):
         for generation in response.generations[0] if response.generations else []:
-            final=summaries(getattr(generation,"message",None))
-            if final:self.text=final[:12000]
+            final = summaries(getattr(generation, "message", None))
+            if final:
+                self.text = final[:12000]
+        self.completed = True
         self.publish("complete")
-    def on_llm_error(self,error,**kwargs):self.publish("error")
+
+    def on_llm_error(self, error, **kwargs):
+        self.completed = True
+        self.publish("error")
+
+    def flush(self):
+        if not self.completed and self.text.strip():
+            self.completed = True
+            self.publish("complete")

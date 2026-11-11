@@ -97,21 +97,32 @@ class DeckAgent:
 
     async def quote(self, state):
         offers, errors = [], []
-        for card in AgentPlan.model_validate(state["plan"]).cards:
-            for supplier in ("TCGplayer", "Cardmarket"):
-                trace,public=tool_start("quote_supplier",{"supplier":supplier,"card_id":card.card_id})
+        cards = AgentPlan.model_validate(state["plan"]).cards
+        sem = asyncio.Semaphore(8)
+        lock = asyncio.Lock()
+
+        async def _quote_one(card, supplier):
+            async with sem:
+                trace, public = tool_start("quote_supplier", {"supplier": supplier, "card_id": card.card_id})
                 try:
-                    progress("quote",f"Checking {supplier} quotations for {card.name}.")
-                    found=await self.suppliers.quote(supplier, card)
-                    offers.extend(found)
-                    tool_end(trace,"quote_supplier",public,"complete",[offer.source for offer in found])
+                    progress("quote", f"Checking {supplier} quotations for {card.name}.")
+                    found = await self.suppliers.quote(supplier, card)
+                    async with lock:
+                        offers.extend(found)
+                    tool_end(trace, "quote_supplier", public, "complete", [offer.source for offer in found])
                 except SupplierError as error:
-                    tool_end(trace,"quote_supplier",public,"error")
-                    message = {"supplier":supplier, "message":str(error)}
-                    if message not in errors:
-                        errors.append(message)
-        return {"offers":[offer.model_dump(mode="json") for offer in offers], "supplier_errors":errors,
-                "event":{"type":"progress", "data":{"step":"quote", "message":f"Retrieved {len(offers)} offers; {len(errors)} supplier limitations.", "limitations":errors}}}
+                    tool_end(trace, "quote_supplier", public, "error")
+                    message = {"supplier": supplier, "message": str(error)}
+                    async with lock:
+                        if message not in errors:
+                            errors.append(message)
+
+        tasks = [_quote_one(card, supplier) for card in cards for supplier in ("TCGplayer", "Cardmarket")]
+        if tasks:
+            await asyncio.gather(*tasks)
+
+        return {"offers": [offer.model_dump(mode="json") for offer in offers], "supplier_errors": errors,
+                "event": {"type": "progress", "data": {"step": "quote", "message": f"Retrieved {len(offers)} offers; {len(errors)} supplier limitations.", "limitations": errors}}}
 
     async def missing(self, state):
         result = budgets(AgentPlan.model_validate(state["plan"]).cards, [Offer.model_validate(row) for row in state["offers"]])
@@ -140,7 +151,8 @@ class DeckAgent:
         value = Command(resume=decision.model_dump(mode="json")) if decision else initial
         async for mode, updates in self.graph.astream(value, config, stream_mode=["updates","custom"]):
             if mode == "custom":
-                self.repo.event(execution.id,user_id,updates["type"],updates["data"])
+                if updates.get("data", {}).get("status") != "loading":
+                    self.repo.event(execution.id, user_id, updates["type"], updates["data"])
                 yield updates
                 continue
             if "__interrupt__" in updates:

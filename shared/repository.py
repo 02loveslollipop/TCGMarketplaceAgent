@@ -449,21 +449,53 @@ class Repository:
             logs = list(session.scalars(select(AuditLog).where(AuditLog.execution_id == execution_id).order_by(AuditLog.created_at)))
             checkpoint = execution.checkpoint or {}
 
+            # Deduplicate events by payload id for thinking and tool
+            events_deduped = []
+            span_map = {}
+            for ev in events:
+                p = ev.payload or {}
+                span_id = p.get("id") if ev.kind in {"thinking", "tool"} else None
+                if span_id:
+                    if span_id in span_map:
+                        idx = span_map[span_id]
+                        existing_status = (events_deduped[idx]["payload"] or {}).get("status")
+                        new_status = p.get("status")
+                        if existing_status == "loading" or new_status in {"complete", "error"}:
+                            events_deduped[idx]["payload"] = p
+                    else:
+                        span_map[span_id] = len(events_deduped)
+                        events_deduped.append({
+                            "id": ev.id,
+                            "kind": ev.kind,
+                            "payload": ev.payload,
+                            "created_at": ev.created_at.isoformat(),
+                        })
+                else:
+                    events_deduped.append({
+                        "id": ev.id,
+                        "kind": ev.kind,
+                        "payload": ev.payload,
+                        "created_at": ev.created_at.isoformat(),
+                    })
+
             provider_summaries = []
             approach_summaries = []
             generic_summaries = []
-            for ev in events:
-                if ev.kind in {"thinking", "reasoning"}:
-                    p = ev.payload or {}
+            for ev in events_deduped:
+                if ev["kind"] in {"thinking", "reasoning"}:
+                    p = ev["payload"] or {}
                     if p.get("status") != "loading" and p.get("summary"):
                         src = p.get("source")
                         summary_txt = p.get("summary", "").strip()
                         if src == "provider_summary":
-                            provider_summaries.append(summary_txt)
+                            if summary_txt not in provider_summaries:
+                                provider_summaries.append(summary_txt)
                         elif src == "approach_summary":
-                            approach_summaries.append(summary_txt)
+                            if summary_txt not in approach_summaries:
+                                approach_summaries.append(summary_txt)
                         else:
-                            generic_summaries.append(summary_txt)
+                            if summary_txt not in generic_summaries:
+                                generic_summaries.append(summary_txt)
 
             parts = []
             if provider_summaries:
@@ -473,6 +505,21 @@ class Repository:
             if generic_summaries and not parts:
                 parts.append("\n\n".join(generic_summaries))
             reasoning_summary = "\n\n".join(parts)
+
+            messages = list(
+                session.scalars(
+                    select(Message)
+                    .where(Message.conversation_id == execution.conversation_id)
+                    .order_by(Message.created_at)
+                )
+            )
+            thread_execs = list(
+                session.scalars(
+                    select(Execution)
+                    .where(Execution.conversation_id == execution.conversation_id)
+                    .order_by(Execution.created_at)
+                )
+            )
 
             return {
                 "id": execution.id,
@@ -484,14 +531,24 @@ class Repository:
                 "created_at": execution.created_at.isoformat(),
                 "checkpoint": checkpoint,
                 "reasoning_summary": reasoning_summary,
-                "events": [
+                "events": events_deduped,
+                "messages": [
                     {
-                        "id": ev.id,
-                        "kind": ev.kind,
-                        "payload": ev.payload,
-                        "created_at": ev.created_at.isoformat(),
+                        "id": m.id,
+                        "role": m.role,
+                        "content": m.content,
+                        "created_at": m.created_at.isoformat(),
                     }
-                    for ev in events
+                    for m in messages
+                ],
+                "thread_executions": [
+                    {
+                        "id": e.id,
+                        "model_id": e.model_id,
+                        "status": e.status,
+                        "created_at": e.created_at.isoformat(),
+                    }
+                    for e in thread_execs
                 ],
                 "logs": [
                     {

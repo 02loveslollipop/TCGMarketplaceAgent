@@ -83,12 +83,76 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, text }) => {
     }
   };
 
+  function isTableSeparator(line: string): boolean {
+    return /^\s*\|?(?:\s*:?-{2,}:?\s*\|)+\s*(?::?-{2,}:?\s*)?$/.test(line);
+  }
+
+  function splitTableCells(line: string): string[] {
+    let s = line.trim();
+    if (s.startsWith('|')) s = s.slice(1);
+    if (s.endsWith('|')) s = s.slice(0, -1);
+    return s.split('|').map(c => c.trim());
+  }
+
+  function parseAlignments(separatorLine: string): ('left' | 'center' | 'right')[] {
+    const cells = splitTableCells(separatorLine);
+    return cells.map(cell => {
+      const left = cell.startsWith(':');
+      const right = cell.endsWith(':');
+      if (left && right) return 'center';
+      if (right) return 'right';
+      return 'left';
+    });
+  }
+
   for (let i = 0; i < rawLines.length; i++) {
     const line = rawLines[i].trimEnd();
     const trimmed = line.trim();
 
     if (!trimmed) {
       flushList();
+      continue;
+    }
+
+    // Table check: line has '|' and next line is table separator
+    if (trimmed.includes('|') && i + 1 < rawLines.length && isTableSeparator(rawLines[i + 1])) {
+      flushList();
+      const headers = splitTableCells(trimmed);
+      const alignments = parseAlignments(rawLines[i + 1]);
+      i += 1; // advance past separator
+      const rows: string[][] = [];
+      while (i + 1 < rawLines.length) {
+        const nextLine = rawLines[i + 1].trim();
+        if (!nextLine || !nextLine.includes('|') || isTableSeparator(nextLine)) break;
+        i += 1;
+        rows.push(splitTableCells(nextLine));
+      }
+      blocks.push(
+        <div key={`table-${i}`} className="chat-markdown-table-wrap">
+          <table className="chat-markdown-table">
+            <thead>
+              <tr>
+                {headers.map((h, cIdx) => (
+                  <th key={cIdx} style={{ textAlign: alignments[cIdx] || 'left' }}>
+                    {renderInline(h)}
+                  </th>
+                ))}
+              </tr>
+            </thead>
+            <tbody>
+              {rows.map((row, rIdx) => (
+                <tr key={rIdx}>
+                  {headers.map((_, cIdx) => (
+                    <td key={cIdx} style={{ textAlign: alignments[cIdx] || 'left' }}>
+                      {renderInline(row[cIdx] ?? '')}
+                    </td>
+                  ))}
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      );
       continue;
     }
 

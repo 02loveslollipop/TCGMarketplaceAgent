@@ -28,9 +28,18 @@ class CardRequest(Contract):
     quantity: int = Field(ge=1, le=60)
     set_name: str
     number: str
-    condition: str
-    language: str
-    printing: str
+    condition: str = Field(
+        default="Near Mint",
+        description="Physical card condition: 'Near Mint', 'Lightly Played', 'Moderately Played', 'Heavily Played', 'Damaged', or 'any'. Never 'Not applicable'.",
+    )
+    language: str = Field(
+        default="English",
+        description="Card language, e.g. 'English' or 'Japanese'.",
+    )
+    printing: str = Field(
+        default="any",
+        description="Card foil/finish variant: 'Normal', 'Holofoil', 'Reverse Holofoil', '1st Edition', or 'any'. Do NOT put game format ('Standard'/'Expanded') here.",
+    )
     image_url: HttpUrl | None = None
     basic_energy: bool = False
     cardmarket_url: HttpUrl | None = None

@@ -13,8 +13,45 @@ export function apiUrl(path: string): string {
   return base ? `${base.replace(/\/$/, '')}${match[2]}` : path;
 }
 
+let activeTokenRefresher: (() => Promise<string | null>) | null = null;
+let latestToken = '';
+
+export function registerTokenRefresher(fn: () => Promise<string | null>) {
+  activeTokenRefresher = fn;
+}
+
+export function setLatestToken(tok: string) {
+  latestToken = tok;
+}
+
 export async function api<T>(path:string, token:string, options:RequestInit={}):Promise<T> {
-  const response=await fetch(apiUrl(path),{...options,...(path.startsWith('/api/auth/')?{credentials:'include' as const}:{}),headers:{...(token?{Authorization:`Bearer ${token}`} : {}),...(options.body?{'Content-Type':'application/json'}:{}),...options.headers}});
+  const effectiveToken = token || latestToken;
+  let response = await fetch(apiUrl(path), {
+    ...options,
+    ...(path.startsWith('/api/auth/') ? { credentials: 'include' as const } : {}),
+    headers: {
+      ...(effectiveToken ? { Authorization: `Bearer ${effectiveToken}` } : {}),
+      ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+      ...options.headers,
+    },
+  });
+
+  if (response.status === 401 && activeTokenRefresher && !path.includes('/portal-session')) {
+    const refreshed = await activeTokenRefresher();
+    if (refreshed) {
+      latestToken = refreshed;
+      response = await fetch(apiUrl(path), {
+        ...options,
+        ...(path.startsWith('/api/auth/') ? { credentials: 'include' as const } : {}),
+        headers: {
+          Authorization: `Bearer ${refreshed}`,
+          ...(options.body ? { 'Content-Type': 'application/json' } : {}),
+          ...options.headers,
+        },
+      });
+    }
+  }
+
   if(!response.ok) {
     const body=await response.json().catch(()=>({}));
     throw new Error(body.error?.message || `Request failed (${response.status}).`);
@@ -22,8 +59,35 @@ export async function api<T>(path:string, token:string, options:RequestInit={}):
   return response.json() as Promise<T>;
 }
 
-export async function stream(path:string, token:string, body:unknown, receive:(event:AgentEvent)=>void, signal:AbortSignal) {
-  const response=await fetch(apiUrl(path),{method:'POST',headers:{'Content-Type':'application/json',Authorization:`Bearer ${token}`},body:JSON.stringify(body),signal});
+export async function stream(path:string, token:string, body:unknown, receive:(event:AgentEvent)=>void, signal?:AbortSignal) {
+  let effectiveToken = token || latestToken;
+  let response = await fetch(apiUrl(path), {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${effectiveToken}`,
+    },
+    body: JSON.stringify(body),
+    signal,
+  });
+
+  if (response.status === 401 && activeTokenRefresher && !path.includes('/portal-session')) {
+    const refreshed = await activeTokenRefresher();
+    if (refreshed) {
+      latestToken = refreshed;
+      effectiveToken = refreshed;
+      response = await fetch(apiUrl(path), {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${effectiveToken}`,
+        },
+        body: JSON.stringify(body),
+        signal,
+      });
+    }
+  }
+
   if(!response.ok) {
     const error=await response.json().catch(()=>({}));
     throw new Error(error.error?.message || `Request failed (${response.status}).`);
