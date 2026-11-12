@@ -3,6 +3,8 @@
 /* Normal flow keeps the layout close button above the navigation heading. */
 .chat-navigation-host { block-size: 100%; min-block-size: 0; }
 .chat-navigation { display: flex; flex-direction: column; block-size: 100%; min-block-size: 0; }
+/* Reserve the native AppLayout close button in the upper navigation corner. */
+.chat-navigation-heading { padding-inline-end: 40px; }
 .chat-navigation-content { flex: 1; min-block-size: 0; overflow-y: auto; }
 .chat-nav-section { padding: 16px; }
 .chat-nav-section > :first-child { margin-block-end: 16px; }
@@ -38,8 +40,22 @@
 .chat-artifact-art { display: flex; gap: 8px; }
 .chat-artifact-art img { object-fit: contain; border-radius: 3px; }
 .chat-artifact-metadata { display: flex; align-items: center; flex-wrap: wrap; gap: 8px 16px; }
-.chat-decision-dock { max-block-size: min(45vh, 360px); overflow: auto; }
-.chat-decision-details { max-block-size: 125px; overflow: auto; }
+.chat-decision-dock { min-block-size: 0; }
+.chat-decision-scroll {
+  max-block-size: min(36vh, 280px);
+  overflow-y: auto;
+  overflow-x: hidden;
+  overscroll-behavior: contain;
+  scrollbar-width: thin;
+  scrollbar-color: var(--chat-muted) transparent;
+  scrollbar-gutter: stable;
+  padding-inline: 2px 8px;
+}
+.chat-decision-scroll::-webkit-scrollbar { width: 8px; }
+.chat-decision-scroll::-webkit-scrollbar-track { background: transparent; }
+.chat-decision-scroll::-webkit-scrollbar-thumb { background: var(--chat-muted); border-radius: 8px; }
+.chat-decision-scroll:focus-visible { outline: 2px solid var(--chat-ai-label); outline-offset: 2px; }
+.chat-decision-details { overflow-wrap: anywhere; }
 .chat-decision-heading { outline-offset: 3px; }
 .chat-jump { text-align: center; }
 .chat-visually-hidden { position: absolute; inline-size: 1px; block-size: 1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
@@ -52,7 +68,7 @@
   .chat-user-message { max-inline-size: 96%; }
   .chat-activity-trace, .chat-artifact-preview { margin-inline-start: 0; }
   .chat-starter-prompts { margin-block-start: 16px; }
-  .chat-decision-dock { max-block-size: 50vh; }
+  .chat-decision-scroll { max-block-size: 36vh; }
 }
 
 .chat-thinking-trace { margin-inline-start: 36px; margin-block-start: 12px; }

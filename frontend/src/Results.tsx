@@ -1,5 +1,5 @@
 import {useState} from 'react';
-import {Alert,Box,Button,Cards,ColumnLayout,Container,ExpandableSection,Header,KeyValuePairs,Link,Pagination,SegmentedControl,SpaceBetween,StatusIndicator,Table,Tabs,TextFilter} from '@cloudscape-design/components';
+import {Alert,Box,Button,Cards,ColumnLayout,Container,ExpandableSection,Header,KeyValuePairs,Link,SegmentedControl,SpaceBetween,StatusIndicator,Table,Tabs,TextFilter} from '@cloudscape-design/components';
 import type {BudgetLine,Card,Legality,Missing,Result,Source} from './contracts';
 import {safeHref} from './client';
 import {Markdown} from './Markdown';
@@ -17,24 +17,21 @@ export function Sources({sources}:{sources:Source[]}) {
 }
 
 export function CardResults({cards,legality,sources=[]}:{cards:Card[];legality:Legality;sources?:Source[]}) {
-  const [view,setView]=useState('cards'),[filter,setFilter]=useState(''),[page,setPage]=useState(1);
+  const [view,setView]=useState('cards'),[filter,setFilter]=useState('');
   const filtered=cards.filter(card=>[card.name,card.set_name,card.number,card.condition,card.language,card.printing].join(' ').toLowerCase().includes(filter.toLowerCase()));
-  const currentPage=Math.min(page,Math.max(1,Math.ceil(filtered.length/12)));
-  const items=filtered.slice((currentPage-1)*12,currentPage*12);
   const header=<Header variant="h3" counter={`(${cards.reduce((sum,card)=>sum+card.quantity,0)} cards)`} description={`${cards.length} requested printings. Quantities and variant preferences are preserved.`} actions={<SegmentedControl label="Deck view" selectedId={view} onChange={({detail})=>setView(detail.selectedId)} options={[{id:'cards',text:'Cards'},{id:'table',text:'Table'}]}/>}>Deck list</Header>;
-  const search=<TextFilter filteringText={filter} filteringAriaLabel="Find cards in deck" filteringPlaceholder="Find cards, sets or variants" countText={`${filtered.length} printings`} onChange={({detail})=>{setFilter(detail.filteringText);setPage(1);}}/>;
-  const pagination=<Pagination currentPageIndex={currentPage} pagesCount={Math.max(1,Math.ceil(filtered.length/12))} onChange={({detail})=>setPage(detail.currentPageIndex)} ariaLabels={{nextPageLabel:'Next page of cards',previousPageLabel:'Previous page of cards',pageLabel:page=>`Card page ${page}`}}/>;
-  const empty=<Box textAlign="center" padding="l"><SpaceBetween size="s"><Box fontWeight="bold">{filter?'No matching cards':'No cards in this result'}</Box>{filter&&<Button onClick={()=>{setFilter('');setPage(1);}}>Clear card filter</Button>}</SpaceBetween></Box>;
+  const search=<TextFilter filteringText={filter} filteringAriaLabel="Find cards in deck" filteringPlaceholder="Find cards, sets or variants" countText={`${filtered.length} printings`} onChange={({detail})=>{setFilter(detail.filteringText);}}/>;
+  const empty=<Box textAlign="center" padding="l"><SpaceBetween size="s"><Box fontWeight="bold">{filter?'No matching cards':'No cards in this result'}</Box>{filter&&<Button onClick={()=>{setFilter('');}}>Clear card filter</Button>}</SpaceBetween></Box>;
   return <SpaceBetween size="m">
     <StatusIndicator type={legality.status==='verified'?'success':'warning'}>Format legality: {legality.status}</StatusIndicator>
     {legality.issues.map((issue,index)=><Alert key={index} type="warning">{issue}</Alert>)}
-    {view==='cards'?<Cards data-testid="card-results" header={header} filter={search} pagination={pagination} empty={empty} cardDefinition={{
+    {view==='cards'?<Cards data-testid="card-results" header={header} filter={search} empty={empty} cardDefinition={{
       header:item=><Header variant="h3">{item.name}</Header>,
       sections:[{id:'image',content:item=>item.image_url?<img className="card-art" src={safeHref(item.image_url)} alt={`${item.name} card`} width="150" loading="lazy"/>:<Box>No image available</Box>},
         {id:'code',header:'Printing',content:item=>`${item.set_name} · ${item.number}`},
         {id:'quantity',header:'Quantity',content:item=>item.quantity},
         {id:'preferences',header:'Preferences',content:item=>`${item.condition} · ${item.language} · ${item.printing}`}]
-    }} items={items} cardsPerRow={[{cards:1},{minWidth:600,cards:2},{minWidth:1000,cards:3}]} ariaLabels={{selectionGroupLabel:'Cards',itemSelectionLabel:(_,item)=>item.name}}/>:<Table data-testid="deck-table" header={header} filter={search} pagination={pagination} empty={empty} items={items} columnDefinitions={[
+    }} items={filtered} cardsPerRow={[{cards:1},{minWidth:600,cards:2},{minWidth:1000,cards:3}]} ariaLabels={{selectionGroupLabel:'Cards',itemSelectionLabel:(_,item)=>item.name}}/>:<Table data-testid="deck-table" header={header} filter={search} empty={empty} items={filtered} columnDefinitions={[
       {id:'name',header:'Card',cell:item=>item.name},{id:'code',header:'Code',cell:item=>`${item.set_name} ${item.number}`},
       {id:'quantity',header:'Quantity',cell:item=>item.quantity},{id:'variant',header:'Preferences',cell:item=>`${item.condition} · ${item.language} · ${item.printing}`}
     ]}/>}
@@ -76,7 +73,18 @@ export function BudgetResults({result}:{result:Result}) {
     <StatusIndicator type={result.legality.status==='verified'?'success':'warning'}>Format legality: {result.legality.status}</StatusIndicator>
     {result.legality.issues.map((issue,index)=><Alert key={index} type="warning">{issue}</Alert>)}
     {result.supplier_errors.map((error,index)=><Alert key={index} type="warning" header={error.supplier}>{error.message}</Alert>)}
-    {result.missing.length>0&&<Alert type="warning" header="Missing quotations"><SpaceBetween size="xs">{result.missing.map((card,index)=><div key={`${card.card_id}-${index}`}>{card.quantity} × {card.name} · {variantDetails(card)}</div>)}</SpaceBetween></Alert>}
+    {!result.availability_unverified&&!result.stock_shortages&&result.missing.length>0&&<Alert type="warning" header="Missing quotations"><SpaceBetween size="xs">{result.missing.map((card,index)=><div key={`${card.card_id}-${index}`}>{card.quantity} × {card.name} · {variantDetails(card)}</div>)}</SpaceBetween></Alert>}
+    {Boolean(result.stock_shortages?.length)&&<Alert type="warning" header="Verified listing shortfalls">The retrieved, matching listings do not cover {result.stock_shortages!.reduce((sum,card)=>sum+card.quantity,0)} requested cards. This does not establish that the whole market is out of stock.</Alert>}
+    {Boolean(result.availability_unverified?.length)&&<Alert type="info" header="Availability unverified"><ExpandableSection headerText={`${result.availability_unverified!.length} printings need a stock check`}><SpaceBetween size="xs">{result.availability_unverified!.map((card,index)=><div key={`${card.card_id}-${index}`}>{card.quantity} × {card.name} · {variantDetails(card)}</div>)}</SpaceBetween></ExpandableSection>Baseline prices and product links remain available. An empty or blocked lookup is not proof of no stock.</Alert>}
+    {Boolean(result.retrieval_diagnostics?.length)&&<ExpandableSection headerText="Supplier retrieval diagnostics"><Table items={result.retrieval_diagnostics!} columnDefinitions={[
+      {id:'card',header:'Card ID',cell:row=>row.card_id},
+      {id:'supplier',header:'Supplier / source',cell:row=>`${row.supplier} · ${row.layer}`},
+      {id:'phase',header:'Stage',cell:row=>row.phase},
+      {id:'outcome',header:'Outcome',cell:row=>row.outcome.replaceAll('_',' ')},
+      {id:'status',header:'HTTP status',cell:row=>row.http_status??'—'},
+      {id:'details',header:'Details',cell:row=>row.message},
+      {id:'date',header:'Checked',cell:row=>new Date(row.retrieved_at).toLocaleString()},
+    ]}/></ExpandableSection>}
     <Tabs ariaLabel="Budget result details" tabs={[
       {id:'budgets',label:`Budgets (${purchasingBudgets.length})`,content:<SpaceBetween size="m">
         <Box color="text-body-secondary">Purchase coverage uses verified seller listings. Converted amounts are estimates; a confirmed supplier total requires complete coverage and confirmed shipping.</Box>

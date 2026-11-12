@@ -13,6 +13,8 @@ function toolTitle(data:{name:string;input?:Record<string,unknown>}) {
     case 'search_deck_lists':return 'Search deck lists';
     case 'get_deck_list':return 'Retrieve deck list';
     case 'query_legality':return 'Query legality catalog';
+    case 'baseline_prices':return `Baseline prices from ${data.input?.supplier||'supplier'}`;
+    case 'check_supplier_stock':return `Check ${data.input?.supplier||'supplier'} stock`;
     case 'quote_supplier':return `Quote ${data.input?.supplier||'supplier'}`;
     case 'current_legality':return 'Check format evidence';
     case 'convert_currency':return 'Convert budget currency';
@@ -32,7 +34,7 @@ export function ThinkingTrace({entries,active}:{entries:ChatEntry[];active:boole
     <ExpandableSection defaultExpanded={false} headerText={<StatusIndicator type={active?'loading':failed?'error':interrupted?'stopped':'info'}>{label}</StatusIndicator>}
       headerDescription={`Reasoning summaries and tool calls${toolErrors?` · ${toolErrors} source ${toolErrors===1?'check':'checks'} could not complete`:''}`}>
       <Steps ariaLabel="Reasoning summaries and tool calls" steps={items.map(entry=>{
-        const status=entry.data.status==='error'?'error' as const:entry.data.status==='loading'?(active?'loading' as const:'stopped' as const):entry.type==='thinking'?'info' as const:'success' as const;
+        const status=entry.data.status==='error'?'error' as const:entry.data.status==='loading'?(active?'loading' as const:'stopped' as const):entry.type==='thinking'||entry.data.diagnostic&&entry.data.diagnostic.outcome!=='success'?'info' as const:'success' as const;
         if(entry.type==='thinking')return {
           status,header:entry.data.source==='provider_summary'?'Model reasoning summary':'Approach summary',
           details:<SpaceBetween size="xs"><div className="chat-message-text"><Markdown text={entry.data.summary}/></div>
@@ -45,6 +47,12 @@ export function ThinkingTrace({entries,active}:{entries:ChatEntry[];active:boole
           status,header:<span data-testid="thinking-tool-call">{toolTitle(tool)}{tool.duration_ms!==undefined&&<Box variant="span" color="text-body-secondary" margin={{left:'xs'}}>{tool.duration_ms<1000?`${tool.duration_ms} ms`:`${Math.round(tool.duration_ms/1000)} s`}</Box>}</span>,
           details:<SpaceBetween size="s">
             {inputs.length>0&&<KeyValuePairs columns={1} items={inputs.map(([key,value])=>({label:key.replaceAll('_',' '),value:<Box variant="code">{typeof value==='string'?value:JSON.stringify(value)}</Box>}))}/>}
+            {tool.diagnostic&&<KeyValuePairs columns={1} items={[
+              {label:'Retrieval outcome',value:tool.diagnostic.outcome.replaceAll('_',' ')},
+              {label:'Source layer',value:tool.diagnostic.layer},
+              ...(tool.diagnostic.http_status?[{label:'HTTP status',value:String(tool.diagnostic.http_status)}]:[]),
+              {label:'Details',value:tool.diagnostic.message},
+            ]}/>}
             {tool.sources.length>0&&<SpaceBetween size="xs">{tool.sources.map((source,index)=><Link key={`${source.url}-${index}`} external href={safeHref(source.url)}>{source.title||`Source ${index+1}`}</Link>)}</SpaceBetween>}
           </SpaceBetween>,
         };

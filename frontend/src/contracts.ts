@@ -13,11 +13,12 @@ export interface Missing { card_id: string; name: string; quantity: number; set_
 export interface Question { kind: 'clarification'|'missing_cards'|'deck_approval'; question: string; options?: string[]; missing?: Missing[]; guidance?: string; actions: string[];card_count?:number;unique_cards?:number;format?:string;ruleset?:string;location?:string;target_currency?:string|null }
 export interface Model { id: string; label: string; provider: string; api_id: string; enabled: boolean; verified_at?: string|null }
 export interface Session { id: string; username: string; role: string; totp_enrolled: boolean; webauthn_enrolled: boolean; webauthn_credentials_count: number }
-export interface Result { plan: { cards: Card[]; format: string; sources: Source[]; explanation: string }; legality: Legality; offers: Offer[]; budgets: Budget[]; missing: Missing[]; supplier_errors: {supplier:string;message:string}[]; recommendation: string;reference_estimates?:ReferenceEstimate[];currency_conversion?:CurrencyConversion;preferences?:UserPreferences }
+export interface RetrievalDiagnostic {supplier:string;card_id:string;phase:string;layer:string;outcome:string;message:string;http_status:number|null;retrieved_at:string}
+export interface Result { plan: { cards: Card[]; format: string; sources: Source[]; explanation: string }; legality: Legality; offers: Offer[]; budgets: Budget[]; missing: Missing[]; supplier_errors: {supplier:string;message:string}[]; recommendation: string;stock_shortages?:Missing[];availability_unverified?:Missing[];retrieval_diagnostics?:RetrievalDiagnostic[];reference_estimates?:ReferenceEstimate[];currency_conversion?:CurrencyConversion;preferences?:UserPreferences }
 export type AgentEvent =
   | {type:'execution';data:{id:string;conversation_id:string}}
   | {type:'thinking';data:{id:string;status:'loading'|'complete'|'error';source:'provider_summary'|'approach_summary';summary:string}}
-  | {type:'tool';data:{id:string;name:string;status:'loading'|'complete'|'error';input:Record<string,string>;sources:{url:string;title:string}[];duration_ms?:number}}
+  | {type:'tool';data:{id:string;name:string;status:'loading'|'complete'|'error';input:Record<string,string>;sources:{url:string;title:string}[];duration_ms?:number;diagnostic?:Pick<RetrievalDiagnostic,'layer'|'outcome'|'message'|'http_status'>}}
   | {type:'progress';data:{step:string;message:string;limitations?:{supplier:string;message:string}[]}}
   | {type:'cards';data:{cards:Card[];sources:Source[];legality:Legality}}
   | {type:'question';data:Question}

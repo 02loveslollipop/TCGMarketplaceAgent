@@ -79,8 +79,8 @@ export function DecisionPanel({
       ]
     : [];
 
-  if(deckApproval)return <Container header={<Header variant="h2"><span className="chat-decision-heading" ref={heading} tabIndex={-1}>{editingDeck?'Request deck changes':'Approve this deck'}</span></Header>}>
-    <SpaceBetween size="s">
+  if(deckApproval)return <Container className="chat-decision-card" header={<Header variant="h2"><span className="chat-decision-heading" ref={heading} tabIndex={-1}>{editingDeck?'Request deck changes':'Approve this deck'}</span></Header>}>
+    <div className="chat-decision-scroll" role="region" aria-label="Deck approval" tabIndex={0}><SpaceBetween size="s">
       <Box>{question.card_count??60} cards · {question.unique_cards??'—'} printings · {question.format}</Box>
       {editingDeck?<>
         <FormField label="Changes to this deck" description="The revised deck will need your approval before pricing.">
@@ -103,11 +103,12 @@ export function DecisionPanel({
           {label:'Target currency',value:question.target_currency||'Original supplier currencies'},
         ]}/></ExpandableSection>
       </>}
-    </SpaceBetween>
+    </SpaceBetween></div>
   </Container>;
 
   return (
     <Container
+      className="chat-decision-card"
       header={
         <Header variant="h2">
           <span className="chat-decision-heading" ref={heading} tabIndex={-1}>
@@ -116,7 +117,7 @@ export function DecisionPanel({
         </Header>
       }
     >
-      <SpaceBetween size="m">
+      <div className="chat-decision-scroll" role="region" aria-label={missing?'Missing card decisions':'Clarification details'} tabIndex={0}><SpaceBetween size="m">
         <Alert type="info">
           <Markdown content={question.question} />
         </Alert>
@@ -237,7 +238,7 @@ export function DecisionPanel({
             </Button>
           )}
         </SpaceBetween>}
-      </SpaceBetween>
+      </SpaceBetween></div>
     </Container>
   );
 }

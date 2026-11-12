@@ -166,7 +166,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     </SpaceBetween>
   </div>;
   const navigation=<div className="chat-navigation" data-testid="chat-navigation">
-    <Box padding="l"><Header variant="h2" actions={<Button variant="icon" iconName="settings" href="#preferences" ariaLabel="Agent preferences"/>}>Deck agent</Header></Box>
+    <Box padding="l"><div className="chat-navigation-heading"><Header variant="h2" actions={<Button variant="icon" iconName="settings" href="#preferences" ariaLabel="Agent preferences"/>}>Deck agent</Header></div></Box>
     <div className="chat-navigation-content">{history}</div>
   </div>;
   const modelControl=<div className="chat-model-control"><Select ariaLabel="Model" data-testid="model-select" disabled={locked} statusType={modelsLoading?'loading':'finished'} loadingText="Loading models" expandToViewport selectedOption={selectedModel?{label:selectedModel.label,value:modelId}:null} options={models.map(model=>({label:model.label,value:model.id,description:model.provider==='openai'?'OpenAI':'Mistral'}))} onChange={({detail})=>{const next=models.find(model=>model.id===detail.selectedOption.value);setModelId(detail.selectedOption.value||'');setModelNotice(`Model changed to ${next?.label}. Your next request will use this model.`);}} placeholder="No enabled models"/></div>;
