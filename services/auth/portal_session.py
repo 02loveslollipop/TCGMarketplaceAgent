@@ -23,20 +23,14 @@ def install_portal_sessions(app, security, serialize, current):
             raise HTTPException(403,'Cross-site session access is unavailable.')
 
     def _extract_tokens(request: Request, cookie_name: str) -> list[str]:
-        tokens = []
-        cookie_tok = request.cookies.get(cookie_name, '').strip()
-        if cookie_tok:
-            tokens.append(cookie_tok)
         auth_hdr = request.headers.get('authorization', '').strip()
-        if auth_hdr.lower().startswith('bearer '):
-            hdr_tok = auth_hdr[7:].strip()
-            if hdr_tok and hdr_tok not in tokens:
-                tokens.append(hdr_tok)
-        for alt_name in ('__Host-tcg_portal', 'tcg_portal_local'):
-            alt_tok = request.cookies.get(alt_name, '').strip()
-            if alt_tok and alt_tok not in tokens:
-                tokens.append(alt_tok)
-        return tokens
+        # An explicit credential must never silently become another account's
+        # cookie session, even when that credential is invalid or revoked.
+        if auth_hdr:
+            token = auth_hdr[7:].strip() if auth_hdr.lower().startswith('bearer ') else ''
+            return [token] if token else []
+        token = request.cookies.get(cookie_name, '').strip()
+        return [token] if token else []
 
     def _extract_token(request: Request, cookie_name: str) -> str:
         tokens = _extract_tokens(request, cookie_name)
@@ -82,7 +76,7 @@ def install_portal_sessions(app, security, serialize, current):
 
         orig_iat = claims.get("orig_iat") if claims.get("orig_iat") is not None else claims.get("iat")
         fresh_token = security.tokens.issue(user, "access", dev_session=claims.get("dev_session"), orig_iat=orig_iat)
-        max_age=get_max_age()
+        max_age=max(0,int(security.tokens.read(fresh_token)["exp"]-time.time()))
         response.set_cookie(name,fresh_token,max_age=max_age,httponly=True,secure=secure,samesite='strict',path='/')
         response.headers['Cache-Control']='no-store'
         sess_data=serialize(user)
@@ -111,7 +105,7 @@ def install_portal_sessions(app, security, serialize, current):
 
         orig_iat = claims.get("orig_iat") if claims.get("orig_iat") is not None else claims.get("iat")
         fresh_token = security.tokens.issue(user, "access", dev_session=claims.get("dev_session"), orig_iat=orig_iat)
-        max_age=get_max_age()
+        max_age=max(0,int(security.tokens.read(fresh_token)["exp"]-time.time()))
         response.set_cookie(name,fresh_token,max_age=max_age,httponly=True,secure=secure,samesite='strict',path='/')
         response.headers['Cache-Control']='no-store'
         sess_data=serialize(user)

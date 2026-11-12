@@ -56,6 +56,10 @@ class Tokens:
                 payload["orig_iat"] = int(orig_iat.timestamp())
             else:
                 payload["orig_iat"] = int(orig_iat)
+            session_end = datetime.fromtimestamp(payload["orig_iat"], timezone.utc) + timedelta(
+                hours=int(os.getenv("MAX_SESSION_HOURS", "168"))
+            )
+            payload["exp"] = min(payload["exp"], session_end)
         if challenge_id:
             payload["challenge_id"] = challenge_id
         if dev_session is not None:
@@ -69,9 +73,21 @@ class Tokens:
                                 options={"require":["sub", "exp", "iat", "nbf", "jti", "type", "version"]})
             if claims["type"] != kind:
                 raise AuthenticationError("Token has incorrect purpose.")
+            if kind == "access":
+                self._check_session_age(claims)
             return claims
         except jwt.InvalidTokenError as error:
             raise AuthenticationError("Invalid or expired token.") from error
+
+    @staticmethod
+    def _check_session_age(claims: dict) -> None:
+        try:
+            original = int(claims.get("orig_iat", claims["iat"]))
+            maximum = int(os.getenv("MAX_SESSION_HOURS", "168")) * 3600
+        except (ValueError, TypeError, OverflowError) as error:
+            raise AuthenticationError("Invalid session lifetime.") from error
+        if int(time.time()) - original >= maximum:
+            raise AuthenticationError("Session has exceeded maximum allowed duration.")
 
     def read_for_refresh(self, token: str, kind="access", max_grace_seconds: int | None = None) -> dict:
         if max_grace_seconds is None:
@@ -112,7 +128,7 @@ class Tokens:
             orig_iat = claims.get("iat", 0)
         orig_iat_ts = int(orig_iat)
 
-        if now_ts - orig_iat_ts > max_session_seconds:
+        if now_ts - orig_iat_ts >= max_session_seconds:
             raise AuthenticationError("Session has exceeded maximum allowed duration.")
 
         return claims
