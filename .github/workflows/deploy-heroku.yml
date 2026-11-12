@@ -48,13 +48,13 @@ jobs:
           trap 'rm -f "$askpass"' EXIT
           export GIT_ASKPASS="$askpass" GIT_TERMINAL_PROMPT=0
           cd "$RUNNER_TEMP/heroku-source"
-          for app in "$AUTH_APP" "$MCP_APP" "$CHAT_APP" "$ADMIN_APP"; do
+          # Consumers accept legacy sessions. Upgrade auth last so no old
+          # consumer receives the new IAM role IDs during the rollout.
+          for app in "$MCP_APP" "$CHAT_APP" "$ADMIN_APP" "$AUTH_APP"; do
             test -n "$app"
             heroku stack:set heroku-24 --app "$app"
             git -c credential.helper= push --force "https://git.heroku.com/$app.git" HEAD:refs/heads/main
             heroku ps:scale web=1:eco --app "$app"
-          done
-          for app in "$AUTH_APP" "$MCP_APP" "$CHAT_APP" "$ADMIN_APP"; do
             web_url="$(heroku info --app "$app" --json | python3 -c 'import json,sys; print(json.load(sys.stdin)["app"]["web_url"])')"
             echo "Checking $app health"
             curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 2 "${web_url%/}/health"
