@@ -11,6 +11,7 @@ from services.admin.app import serialize_model
 from services.orchestrator.legality_sync import sync_legality
 from services.orchestrator.models import ModelUnavailable, verify_api_id, invocation_context
 from shared.role_policy import RolePolicies, PolicyError
+from services.orchestrator.exchange import exchange_rates, ExchangeUnavailable
 
 
 class VerificationInput(BaseModel):
@@ -87,10 +88,18 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
     def get_preferences(user=Depends(current)):
         return repo.user_preferences(user.id)
 
+    @app.get("/currencies")
+    async def currencies(user=Depends(current)):
+        try:
+            return await exchange_rates.currencies()
+        except ExchangeUnavailable as error:
+            raise HTTPException(503, str(error)) from None
+
     @app.put("/preferences")
     def update_preferences(body: UserPreferencesPayload, user=Depends(current)):
         try:
-            return repo.save_user_preferences(user.id, body.ruleset, body.format)
+            return repo.save_user_preferences(user.id, body.ruleset, body.format,
+                                              location=body.location, target_currency=body.target_currency)
         except ValueError as err:
             raise HTTPException(422, str(err))
 
@@ -196,8 +205,8 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
         if execution.status != "waiting":
             raise HTTPException(409,"Execution is not waiting for an answer.")
         actions = execution.checkpoint.get("actions",[])
-        text_provided = bool(body.text.strip() or body.selected_option)
-        if body.action not in actions or (body.action in {"keep_missing","substitute"} and not body.approved) or (body.action in {"clarify","substitute"} and not text_provided):
+        text_provided = bool(body.text.strip() or body.action=="clarify" and body.selected_option)
+        if body.action not in actions or (body.action in {"approve_deck","keep_missing","substitute"} and not body.approved) or (body.action in {"clarify","revise_deck","substitute"} and not text_provided):
             raise HTTPException(422,"Answer the current question and explicitly approve substitutions or missing cards.")
         policy = await allowed(execution.model_id,user)
         if not repo.claim_execution(execution_id,user.id):

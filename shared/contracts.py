@@ -86,7 +86,7 @@ class Legality(Contract):
 
 
 class Decision(Contract):
-    action: Literal["clarify", "substitute", "keep_missing", "cancel"]
+    action: Literal["clarify", "approve_deck", "revise_deck", "substitute", "keep_missing", "cancel"]
     text: str = Field(default="", max_length=8000)
     selected_option: str | None = None
     approved: bool = False
@@ -95,6 +95,8 @@ class Decision(Contract):
 class UserPreferencesPayload(Contract):
     ruleset: Literal["auto", "international", "japan"] = "auto"
     format: Literal["auto", "standard", "expanded"] = "auto"
+    location: str = Field(default="", max_length=160)
+    target_currency: str | None = Field(default=None, pattern=r"^[A-Z]{3}$")
 
 
 class ConversationRenamePayload(Contract):

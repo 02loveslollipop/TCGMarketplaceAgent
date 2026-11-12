@@ -21,6 +21,9 @@ def main():
     repo = repository()
     print("Starting legality catalog refresh (International & Japan Standard + Expanded)...")
     status = sync_legality(repo, triggered_by="cli")
+    if status.get('status') != 'synced':
+        print(status.get('error') or 'Legality refresh failed; previous data retained.', file=sys.stderr)
+        return 1
     print(f"Legality catalog refreshed successfully:")
     print(f"  Status: {status.get('status')}")
     print(f"  Sets count: {status.get('sets_count')}")
@@ -28,11 +31,12 @@ def main():
     print(f"  Standard regulation marks: International={status.get('international_standard_marks')}, Japan={status.get('japan_standard_marks')}")
     print(f"  Last refreshed at: {status.get('last_refreshed_at')}")
     print(f"  Next refresh at: {status.get('next_refresh_at')}")
+    return 0
 
 
 if __name__ == "__main__":
     try:
-        main()
+        sys.exit(main())
     except Exception as error:
         print(f"Legality refresh failed: {error}", file=sys.stderr)
         sys.exit(1)

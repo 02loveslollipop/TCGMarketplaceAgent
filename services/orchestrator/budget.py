@@ -235,3 +235,39 @@ def budgets(cards: list[CardRequest], offers: list[Offer]) -> dict:
     missing = [{**request_details(card), "quantity":card.quantity-covered[request_identity(card)]}
                for card in requests if card.quantity > covered[request_identity(card)]]
     return {"budgets":result, "missing":missing, "recommendation":"Lowest comparable product prices within each currency; shipping and incomplete coverage remain explicit. No cross-currency total is asserted."}
+
+
+def reference_estimates(cards: list[CardRequest], offers: list[Offer]) -> list[dict]:
+    """Indicative deck costs, never inventory allocation or a confirmed quote."""
+    requests = merge_requests(cards)
+    result = []
+    references = [offer for offer in offers if offer.price_kind == "reference"]
+    for supplier, currency in sorted({(offer.supplier, offer.currency) for offer in references}):
+        lines = []
+        subtotal = Decimal("0")
+        priced = 0
+        for card in requests:
+            candidates = [offer for offer in references if offer.supplier == supplier and offer.currency == currency
+                          and normalized(offer.name) == normalized(card.name)
+                          and normalized(offer.set_name) == normalized(card.set_name)
+                          and card_number(offer.number) == card_number(card.number)
+                          and (normalize_printing(card.printing) == "any"
+                               or normalize_printing(card.printing) == normalize_printing(offer.printing))]
+            if not candidates:
+                continue
+            # Prefer a market reference where provided; a low and market value
+            # for one finish are not two separate sellers or stocks.
+            market = [offer for offer in candidates if offer.id.endswith(":market")]
+            selected = min(market or candidates, key=lambda offer: (offer.price, offer.id))
+            line_total = selected.price * card.quantity
+            subtotal += line_total
+            priced += card.quantity
+            lines.append({**request_details(card), "quantity": card.quantity,
+                          "unit_price": str(selected.price), "line_total": str(line_total),
+                          "source": selected.source.model_dump(mode="json")})
+        if lines:
+            result.append({"supplier": supplier, "currency": currency, "product_subtotal": str(subtotal),
+                           "priced_cards": priced, "requested_cards": sum(card.quantity for card in requests),
+                           "price_coverage_complete": priced == sum(card.quantity for card in requests),
+                           "known_shipping": None, "confirmed_total": None, "lines": lines})
+    return result

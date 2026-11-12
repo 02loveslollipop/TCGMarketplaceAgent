@@ -6,11 +6,12 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command, interrupt
 
 from shared.contracts import AgentPlan, Decision, Legality, Offer, Source
-from services.orchestrator.budget import budgets
+from services.orchestrator.budget import budgets, reference_estimates
 from services.orchestrator.checkpoints import DatabaseSaver
 from services.orchestrator.suppliers import SupplierError
 from services.orchestrator.progress import progress
 from services.orchestrator.trace import tool_start, tool_end, event_writer
+from services.orchestrator.exchange import exchange_rates
 
 
 class State(TypedDict, total=False):
@@ -26,20 +27,23 @@ class State(TypedDict, total=False):
     budget: dict
     question: dict
     consent: dict
+    deck_approval: dict
     event: dict
     cancelled: bool
 
 
 class DeckAgent:
-    def __init__(self, repo, planner, suppliers):
+    def __init__(self, repo, planner, suppliers, exchange=None):
         self.repo, self.planner, self.suppliers = repo, planner, suppliers
+        self.exchange = exchange or exchange_rates
         builder = StateGraph(State)
-        for name in ("understand", "clarify", "validate", "quote", "missing", "decide", "finish"):
+        for name in ("understand", "clarify", "validate", "review", "quote", "missing", "decide", "finish"):
             builder.add_node(name, getattr(self, name))
         builder.add_edge(START, "understand")
         builder.add_conditional_edges("understand", lambda state:"clarify" if state["plan"].get("question") else "validate")
         builder.add_conditional_edges("clarify", lambda state:END if state.get("cancelled") else "understand")
-        builder.add_edge("validate", "quote")
+        builder.add_conditional_edges("validate", lambda state:"review" if state["plan"].get("is_deck") or sum(card["quantity"] for card in state["plan"]["cards"]) == 60 else "quote")
+        builder.add_conditional_edges("review", lambda state:END if state.get("cancelled") else "understand" if state.get("deck_approval",{}).get("action")=="revise_deck" else "quote")
         builder.add_edge("quote", "missing")
         builder.add_conditional_edges("missing", lambda state:"decide" if state["budget"]["missing"] else "finish")
         builder.add_conditional_edges("decide", lambda state:END if state.get("cancelled") else "understand" if state.get("consent",{}).get("action")=="substitute" else "finish")
@@ -80,7 +84,7 @@ class DeckAgent:
             plan = await self.planner.resolve(state["request"], state.get("history", []), knowledge, **kwargs)
         except TypeError:
             plan = await self.planner.resolve(state["request"], state.get("history", []), knowledge)
-        return {"knowledge":knowledge, "plan":plan.model_dump(mode="json"), "consent":{},
+        return {"knowledge":knowledge, "plan":plan.model_dump(mode="json"), "consent":{}, "deck_approval":{},
                 "event":{"type":"progress", "data":{"step":"understand", "message":plan.question or "Resolved actual card/deck identities and preferences."}}}
 
     async def clarify(self, state):
@@ -150,8 +154,39 @@ class DeckAgent:
         return {"offers": [offer.model_dump(mode="json") for offer in offers], "supplier_errors": errors,
                 "event": {"type": "progress", "data": {"step": "quote", "message": f"Retrieved {len(offers)} offers; {len(errors)} supplier limitations.", "limitations": errors}}}
 
+    async def review(self, state):
+        plan = state["plan"]
+        payload = {
+            "kind": "deck_approval",
+            "question": "Review the deck, then approve it to compare supplier prices and prepare your buying budget. You can request changes before pricing starts.",
+            "actions": ["approve_deck", "revise_deck", "cancel"],
+            "card_count": sum(card["quantity"] for card in plan["cards"]),
+            "unique_cards": len(plan["cards"]),
+            "format": plan.get("format"), "ruleset": plan.get("ruleset"),
+            "location": state.get("preferences", {}).get("location", ""),
+            "target_currency": state.get("preferences", {}).get("target_currency"),
+        }
+        decision = Decision.model_validate(interrupt(payload))
+        if decision.action == "cancel":
+            return {"cancelled": True}
+        if decision.action == "approve_deck" and decision.approved:
+            return {"deck_approval": {"action": "approve_deck", "approved": True, "cards": plan["cards"]},
+                    "event": {"type": "progress", "data": {"step": "deck_approved", "message": "Deck approved. Comparing supplier prices to prepare your budget."}}}
+        if decision.action == "revise_deck" and decision.text.strip():
+            history = [*state.get("history", []),
+                       {"role": "assistant", "content": {"type": "cards", "data": {"cards": plan["cards"]}}},
+                       {"role": "user", "content": {"text": decision.text.strip()}}]
+            return {"request": state["request"] + "\nRequested deck changes before pricing: " + decision.text.strip(),
+                    "history": history, "deck_approval": {"action": "revise_deck", "approved": False}}
+        raise ValueError("Approve the displayed deck, request specific changes, or cancel before pricing.")
+
     async def missing(self, state):
-        result = budgets(AgentPlan.model_validate(state["plan"]).cards, [Offer.model_validate(row) for row in state["offers"]])
+        cards = AgentPlan.model_validate(state["plan"]).cards
+        offers = [Offer.model_validate(row) for row in state["offers"]]
+        result = budgets(cards, offers)
+        result["reference_estimates"] = reference_estimates(cards, offers)
+        if result["reference_estimates"]:
+            result["recommendation"] = "Review the supplier budgets and price-guide estimates below. Price-guide estimates do not establish stock, condition, language, delivery, or a confirmed purchase total. Converted amounts are indicative; the original supplier amounts remain available."
         advice = await self.planner.alternatives(AgentPlan.model_validate(state["plan"]), result["missing"]) if result["missing"] else ""
         return {"budget":result, "question":{"kind":"missing_cards", "missing":result["missing"], "guidance":advice,
                                               "question":"Choose substitutes to research, or explicitly permit retaining these missing cards.", "actions":["substitute", "keep_missing", "cancel"]}}
@@ -196,8 +231,19 @@ class DeckAgent:
                     "summary": "Applied user approval to retain missing cards and finalized supplier budgets.",
                 },
             })
-        return {"event":{"type":"result", "data":{"plan":state["plan"], "legality":state["legality"],
-                    "offers":state["offers"], **state["budget"], "supplier_errors":state["supplier_errors"], "consent":state.get("consent",{})}}}
+        result = {"plan":state["plan"], "legality":state["legality"],
+                    "offers":state["offers"], **state["budget"], "supplier_errors":state["supplier_errors"],
+                    "consent":state.get("consent",{}), "deck_approval":state.get("deck_approval",{}),
+                    "preferences":state.get("preferences",{})}
+        target = state.get("preferences", {}).get("target_currency")
+        if target:
+            trace, public = tool_start("convert_currency", {"target_currency": target})
+            result = await self.exchange.convert(result, target)
+            conversion = result.get("currency_conversion", {})
+            tool_end(trace, "convert_currency", public,
+                     "complete" if conversion.get("status") == "available" else "error",
+                     [conversion["source"]] if conversion.get("source") else [])
+        return {"event":{"type":"result", "data":result}}
 
     async def stream(self, execution_id: str, user_id: str, initial=None, decision: Decision | None = None):
         execution = self.repo.execution(execution_id, user_id)

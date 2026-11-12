@@ -227,5 +227,7 @@ class UserPreference(Base):
     user_id: Mapped[str] = mapped_column(String(36), primary_key=True)
     ruleset: Mapped[str] = mapped_column(String(24), default="auto")
     format: Mapped[str] = mapped_column(String(24), default="auto")
+    location: Mapped[str] = mapped_column(String(160), default="", server_default="")
+    target_currency: Mapped[str | None] = mapped_column(String(3))
     updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
 

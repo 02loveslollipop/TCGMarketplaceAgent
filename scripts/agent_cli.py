@@ -264,6 +264,12 @@ async def main_async(args: argparse.Namespace) -> int:
                     "selected_option": choice,
                     "approved": True,
                 }
+            elif kind == "deck_approval":
+                if not getattr(args, "approve_deck", False):
+                    print("[pause] Review the deck before supplier pricing. Resume with approve_deck, revise_deck, or cancel.")
+                    print("Use --approve-deck only when you explicitly want to approve generated decks in this run.")
+                    return 2
+                decision_payload = {"action": "approve_deck", "approved": True}
             elif kind == "missing_cards":
                 if not args.auto_missing:
                     print(f"[pause] Paused at missing cards: {question.get('missing')}")
@@ -327,6 +333,7 @@ def main():
     parser.add_argument("--totp-secret", help="TOTP secret for auto-generation")
     parser.add_argument("--refresh", action="store_true", help="Test sliding session refresh")
     parser.add_argument("--auto-clarify", help="Auto-answer clarification (first, index, or match text)")
+    parser.add_argument("--approve-deck", action="store_true", help="Explicitly approve generated decks before supplier pricing")
     parser.add_argument("--auto-missing", default="keep_missing", help="Auto-decision for missing cards")
     parser.add_argument("--assert-cards", type=int, help="Assert minimum total cards")
     parser.add_argument("--assert-offers", action="store_true", help="Assert supplier offers > 0")

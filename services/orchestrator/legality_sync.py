@@ -15,6 +15,8 @@ logger = logging.getLogger("orchestrator.legality")
 TCGDEX_GQL_URL = "https://api.tcgdex.net/v2/graphql"
 TCGDEX_LEGALS_URL = "https://raw.githubusercontent.com/tcgdex/cards-database/master/meta/legals.ts"
 POKEMON_CARD_JP_URL = "https://www.pokemon-card.com/rules/regulation/"
+# The upstream filter still uses the old Shining Legends set identifier.
+TCGDEX_BANNED_ID_ALIASES = {"sm35-45": "sm3.5-45"}
 
 MODERN_SET_CODE_MAPPINGS: dict[str, str] = {
     "me01": "MEG",
@@ -92,9 +94,6 @@ def fetch_tcgdex_sets() -> tuple[list[dict], list[dict]]:
         name
         releaseDate
         tcgOnline
-        abbreviation {
-          official
-        }
         serie {
           id
           name
@@ -109,9 +108,6 @@ def fetch_tcgdex_sets() -> tuple[list[dict], list[dict]]:
         name
         releaseDate
         tcgOnline
-        abbreviation {
-          official
-        }
         serie {
           id
           name
@@ -126,8 +122,11 @@ def fetch_tcgdex_sets() -> tuple[list[dict], list[dict]]:
     with httpx.Client(timeout=15.0) as client:
         resp = client.post(TCGDEX_GQL_URL, json={"query": query})
         resp.raise_for_status()
-        data = resp.json().get("data", {})
-        return data.get("enSets", []), data.get("jaSets", [])
+        payload = resp.json()
+        data = payload.get("data") or {}
+        if payload.get("errors") or not data.get("enSets") or not data.get("jaSets"):
+            raise ValueError("TCGdex did not return complete English and Japanese set catalogs.")
+        return data["enSets"], data["jaSets"]
 
 
 def fetch_tcgdex_legals_rules() -> dict[str, Any]:
@@ -162,6 +161,8 @@ def fetch_tcgdex_legals_rules() -> dict[str, Any]:
             if card_id:
                 banned_ids.append(card_id)
 
+    if not std_marks_match or not exp_series_match or not banned_cards_match or not banned_ids:
+        raise ValueError("TCGdex legality rules could not be fully parsed.")
     return {
         "standard_marks": standard_marks,
         "expanded_series": expanded_series,
@@ -169,7 +170,7 @@ def fetch_tcgdex_legals_rules() -> dict[str, Any]:
     }
 
 
-def fetch_japan_extra_bans() -> list[dict[str, str]]:
+def fetch_japan_extra_bans(*, strict: bool = False) -> list[dict[str, str]]:
     """Fetch Japan Extra banned cards directly from pokemon-card.com."""
     try:
         with httpx.Client(timeout=15.0, headers={"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}) as client:
@@ -204,7 +205,9 @@ def fetch_japan_extra_bans() -> list[dict[str, str]]:
                     if results:
                         return results
     except Exception as exc:
-        logger.warning("Could not fetch Japan rules directly from %s: %s; using verified fallback.", POKEMON_CARD_JP_URL, exc)
+        logger.warning("Could not fetch Japan rules directly from %s: %s; using a static reference fallback.", POKEMON_CARD_JP_URL, exc)
+    if strict:
+        raise ValueError("Current Japanese banned-card rules could not be retrieved or parsed.")
     return JAPAN_EXTRA_BANS_FALLBACK
 
 
@@ -214,7 +217,8 @@ def fetch_banned_card_metadata(card_ids: list[str]) -> dict[str, dict]:
         return {}
     query_parts = []
     for idx, cid in enumerate(card_ids[:60]):
-        query_parts.append(f'c{idx}: card(id: "{cid}") {{ id name localId set {{ id name releaseDate tcgOnline }} }}')
+        lookup_id = TCGDEX_BANNED_ID_ALIASES.get(cid, cid)
+        query_parts.append(f'c{idx}: card(id: {json.dumps(lookup_id)}) {{ id name localId set {{ id name releaseDate tcgOnline }} }}')
     batched_query = f"query BatchedBannedCards {{\n  " + "\n  ".join(query_parts) + "\n}"
     try:
         with httpx.Client(timeout=15.0) as client:
@@ -238,32 +242,16 @@ def build_legality_dataset(triggered_by: str = "system") -> dict[str, Any]:
     now = utcnow()
     next_refresh = now + timedelta(days=7)
 
-    # 1. Fetch TCGdex sets
-    try:
-        en_sets, ja_sets = fetch_tcgdex_sets()
-        sources.append(TCGDEX_GQL_URL)
-    except Exception as exc:
-        logger.error("TCGdex sets fetch failed (%s); building offline seed.", exc)
-        en_sets, ja_sets = _build_offline_sets()
-
-    # 2. Fetch TCGdex legals.ts rules
-    try:
-        rules = fetch_tcgdex_legals_rules()
-        sources.append(TCGDEX_LEGALS_URL)
-    except Exception as exc:
-        logger.warning("TCGdex legals fetch failed (%s); using verified default marks.", exc)
-        rules = {
-            "standard_marks": ["H", "I", "J"],
-            "expanded_series": ["bw", "xy", "sm", "swsh", "sv", "me"],
-            "banned_ids": ["bw3-67", "xy6-77", "xy7-74", "xy4-118", "xy5-133", "xy9-109", "xy9-98", "sm115-58", "sm11-206", "sm35-45", "sm6-83", "sm10-78", "xy1-124", "sm10-165", "sm12-194", "bw9-101", "sm10-178", "swsh2-165", "swsh7-83"],
-        }
-
-    # 3. Fetch Japan Extra bans
-    jp_bans_list = fetch_japan_extra_bans()
+    # Required sources must all succeed before replacing the last good snapshot.
+    en_sets, ja_sets = fetch_tcgdex_sets()
+    sources.append(TCGDEX_GQL_URL)
+    rules = fetch_tcgdex_legals_rules()
+    sources.append(TCGDEX_LEGALS_URL)
+    jp_bans_list = fetch_japan_extra_bans(strict=True)
     sources.append(POKEMON_CARD_JP_URL)
-
-    # Resolve banned cards details for International
     banned_metadata = fetch_banned_card_metadata(rules.get("banned_ids", []))
+    if any(not banned_metadata.get(cid, {}).get("name") for cid in rules.get("banned_ids", [])):
+        raise ValueError("TCGdex did not resolve the complete banned-card list.")
 
     # Process sets
     sets_records: list[dict] = []
@@ -346,14 +334,14 @@ def build_legality_dataset(triggered_by: str = "system") -> dict[str, Any]:
             "id": rec_id,
             "ruleset": "international",
             "format": "expanded",
-            "card_id": cid,
+            "card_id": card_data.get("id") or cid,
             "card_name": card_name,
             "card_name_ja": None,
             "set_code": set_code,
             "set_name": set_info.get("name"),
             "card_number": local_id,
-            "reason": "Official Play! Pokémon Expanded Banned List",
-            "source_url": "https://www.pokemon.com/us/pokemon-tcg-banned-card-list/",
+            "reason": "TCGdex Expanded banned-card catalog",
+            "source_url": TCGDEX_LEGALS_URL,
         })
 
     for item in EXTRA_KNOWN_EXPANDED_BANS:
@@ -442,12 +430,16 @@ def _build_offline_sets() -> tuple[list[dict], list[dict]]:
 
 def sync_legality(repository: Repository, triggered_by: str = "system") -> dict[str, Any]:
     """Execute the full legality sync and persist into the database."""
-    dataset = build_legality_dataset(triggered_by=triggered_by)
-    repository.replace_legality_catalog(
-        sets=dataset["sets"],
-        bans=dataset["bans"],
-        sync_state=dataset["sync_state"],
-    )
+    try:
+        dataset = build_legality_dataset(triggered_by=triggered_by)
+        repository.replace_legality_catalog(
+            sets=dataset["sets"],
+            bans=dataset["bans"],
+            sync_state=dataset["sync_state"],
+        )
+    except Exception:
+        logger.exception("Legality refresh failed; preserving the previous snapshot.")
+        repository.record_legality_failure(triggered_by)
     return repository.legality_status()
 
 
@@ -461,6 +453,8 @@ def should_refresh_legality(repository: Repository) -> bool:
         return True
     try:
         next_dt = datetime.fromisoformat(next_dt_str)
+        if next_dt.tzinfo is None:
+            next_dt = next_dt.replace(tzinfo=timezone.utc)
         return utcnow() >= next_dt
     except Exception:
         return True

@@ -11,7 +11,7 @@ import httpx
 from pydantic import ValidationError
 
 from shared.contracts import CardRequest, Offer, Source, utcnow
-from services.orchestrator.budget import card_number, normalize_condition, normalize_printing, normalized
+from services.orchestrator.budget import card_number, normalized
 
 TCGPLAYER_ACTOR = "devcake~tcgplayer-data-scraper"
 TCGPLAYER_LISTINGS_ACTOR = "crawloop~tcgplayer-listings-scraper"
@@ -162,8 +162,8 @@ class Suppliers:
         id_source: Source,
     ) -> list[Offer]:
         offers: list[Offer] = []
-        cond_val = card.condition if normalize_condition(card.condition) != "any" else "Near Mint"
-        lang_val = card.language or "English"
+        # Price guides report aggregates, not seller stock or variant guarantees.
+        # Keep them visible as references and out of confirmed purchase budgets.
 
         if supplier == "TCGplayer":
             tcg = pricing.get("tcgplayer")
@@ -183,19 +183,20 @@ class Suppliers:
                     market_price = finish_data.get("marketPrice")
                     mid_price = finish_data.get("midPrice")
 
-                    printing = "Reverse Holofoil" if "reverse" in finish_key.lower() else ("Holofoil" if "holo" in finish_key.lower() else "Normal")
+                    printing = {"normal": "Normal", "non-holofoil": "Normal", "holofoil": "Holofoil",
+                                "reverse": "Reverse Holofoil", "reverse-holofoil": "Reverse Holofoil"}.get(finish_key.lower())
                     product_url = f"https://www.tcgplayer.com/product/{product_id}" if product_id else f"https://api.tcgdex.net/v2/en/cards/{card_id}"
                     source = Source(url=product_url, title=f"{card.name} ({card.set_name} #{card.number}) — TCGplayer via TCGdex", retrieved_at=retrieved_at)
 
                     chosen_prices = []
                     best_low = direct_low_price if (direct_low_price is not None and direct_low_price > 0) else low_price
                     if best_low is not None and best_low > 0:
-                        chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:low", decimal(best_low), "TCGplayer Lowest Listing"))
+                        chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:low", decimal(best_low), "TCGplayer Low Reference"))
                     if market_price is not None and market_price > 0:
                         if not best_low or abs(float(market_price) - float(best_low)) > 0.001:
-                            chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:market", decimal(market_price), "TCGplayer Market Listing"))
+                            chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:market", decimal(market_price), "TCGplayer Market Reference"))
                     elif not chosen_prices and mid_price is not None and mid_price > 0:
-                        chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:mid", decimal(mid_price), "TCGplayer Mid Listing"))
+                        chosen_prices.append((f"tcgplayer:{card_id}:{finish_key}:mid", decimal(mid_price), "TCGplayer Mid Reference"))
 
                     for offer_id, price_val, seller_label in chosen_prices:
                         offers.append(Offer(
@@ -204,17 +205,17 @@ class Suppliers:
                             supplier="TCGplayer",
                             set_name=card.set_name,
                             number=card.number,
-                            condition=cond_val,
-                            language=lang_val,
+                            condition=None,
+                            language=None,
                             printing=printing,
                             price=price_val,
                             currency=currency,
-                            quantity=max(card.quantity, 4),
-                            availability="in_stock",
-                            price_kind="listing",
+                            quantity=None,
+                            availability="unknown",
+                            price_kind="reference",
                             shipping=None,
                             shipping_confirmed=False,
-                            seller=seller_label,
+                            seller=None,
                             source=source,
                             identity_source=id_source,
                         ))
@@ -240,17 +241,17 @@ class Suppliers:
                         supplier="Cardmarket",
                         set_name=card.set_name,
                         number=card.number,
-                        condition=cond_val,
-                        language=lang_val,
+                        condition=None,
+                        language=None,
                         printing="Normal",
                         price=decimal(normal_low),
                         currency=currency,
-                        quantity=max(card.quantity, 4),
-                        availability="in_stock",
-                        price_kind="listing",
+                        quantity=None,
+                        availability="unknown",
+                        price_kind="reference",
                         shipping=None,
                         shipping_confirmed=False,
-                        seller="Cardmarket Trend/Low",
+                        seller=None,
                         source=source,
                         identity_source=id_source,
                     ))
@@ -263,46 +264,20 @@ class Suppliers:
                         supplier="Cardmarket",
                         set_name=card.set_name,
                         number=card.number,
-                        condition=cond_val,
-                        language=lang_val,
+                        condition=None,
+                        language=None,
                         printing="Holofoil",
                         price=decimal(holo_low),
                         currency=currency,
-                        quantity=max(card.quantity, 4),
-                        availability="in_stock",
-                        price_kind="listing",
+                        quantity=None,
+                        availability="unknown",
+                        price_kind="reference",
                         shipping=None,
                         shipping_confirmed=False,
-                        seller="Cardmarket Holo Trend/Low",
+                        seller=None,
                         source=source,
                         identity_source=id_source,
                     ))
-                elif (holo_low is None or holo_low <= 0) and (normal_low is not None and normal_low > 0):
-                    tcg_data = pricing.get("tcgplayer") if isinstance(pricing.get("tcgplayer"), dict) else {}
-                    tcg_finishes = [k for k, v in tcg_data.items() if isinstance(v, dict)]
-                    tcg_only_holo = bool(tcg_finishes) and all("holo" in k.lower() for k in tcg_finishes)
-                    card_is_holo = normalize_printing(card.printing) == "holofoil"
-                    if tcg_only_holo or card_is_holo:
-                        offers.append(Offer(
-                            id=f"cardmarket:{card_id}:holo",
-                            name=card.name,
-                            supplier="Cardmarket",
-                            set_name=card.set_name,
-                            number=card.number,
-                            condition=cond_val,
-                            language=lang_val,
-                            printing="Holofoil",
-                            price=decimal(normal_low),
-                            currency=currency,
-                            quantity=max(card.quantity, 4),
-                            availability="in_stock",
-                            price_kind="listing",
-                            shipping=None,
-                            shipping_confirmed=False,
-                            seller="Cardmarket Trend/Low (Foil)",
-                            source=source,
-                            identity_source=id_source,
-                        ))
 
         return offers
 
@@ -349,7 +324,12 @@ class Suppliers:
                     cand_pricing = (cand_data or {}).get("pricing") if isinstance(cand_data, dict) else None
                 if isinstance(cand_pricing, dict):
                     cand_id_source = Source(url=f"https://api.tcgdex.net/v2/en/cards/{cand_id}", title=f"{card.name} #{card.number}")
-                    cand_offers = self._offers_from_tcgdex_pricing(cand_id, cand_pricing, supplier, card, cand_id_source)
+                    priced_card = card.model_copy(update={
+                        "name": cand_data.get("name") or card.name,
+                        "set_name": (cand_data.get("set") or {}).get("name") or tcgdex_set_id(cand_id, cand_data.get("localId")),
+                        "number": str(cand_data.get("localId") or cand_id.rsplit("-", 1)[-1]),
+                    })
+                    cand_offers = self._offers_from_tcgdex_pricing(cand_id, cand_pricing, supplier, priced_card, cand_id_source)
                     if cand_offers:
                         if cand_id != card.card_id:
                             for off in cand_offers:

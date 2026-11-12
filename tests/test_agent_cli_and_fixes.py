@@ -281,9 +281,9 @@ async def test_cardmarket_derived_holo_offer():
     offers = await suppliers.quote("Cardmarket", card)
     assert len(offers) >= 1
     holo_offer = next((o for o in offers if o.printing == "Holofoil"), None)
-    assert holo_offer is not None
-    assert holo_offer.price == Decimal("8.50")
-    assert equivalent(card, holo_offer) is True
+    assert holo_offer is None
+    assert offers[0].price_kind == "reference"
+    assert equivalent(card, offers[0]) is False
 
 
 @pytest.mark.asyncio
@@ -325,10 +325,10 @@ async def test_basic_energy_fallback_candidates():
     tcg_offers = await suppliers.quote("TCGplayer", card)
     assert len(tcg_offers) > 0
     assert tcg_offers[0].supplier == "TCGplayer"
-    assert tcg_offers[0].set_name == "MEE"
+    assert tcg_offers[0].set_name == "sve"
     assert tcg_offers[0].number == "006"
     assert "priced from printing sve-006" in tcg_offers[0].source.title
-    assert equivalent(card, tcg_offers[0]) is True
+    assert equivalent(card, tcg_offers[0]) is False
 
 
 @pytest.mark.asyncio

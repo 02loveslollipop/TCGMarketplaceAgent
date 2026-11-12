@@ -171,8 +171,14 @@ class Research:
         """Recursively inspect GraphQL node and cache cards containing id and name."""
         cached = []
         if isinstance(node, dict):
-            if "id" in node and "name" in node and isinstance(node["id"], str):
-                self.cards[node["id"]] = node
+            if all(key in node for key in ("id", "name", "localId")) and isinstance(node["id"], str):
+                # Nested set/series objects also have id/name. Only cards belong
+                # here, and a later partial query must not discard full metadata.
+                previous = self.cards.get(node["id"], {})
+                merged = {**previous, **node}
+                if isinstance(node.get("set"), dict):
+                    merged["set"] = {**(previous.get("set") or {}), **node["set"]}
+                self.cards[node["id"]] = merged
                 cached.append(node)
             for v in node.values():
                 cached.extend(self._extract_and_cache_cards(v))
@@ -641,8 +647,9 @@ class Research:
                 "total_sets": len(catalog.get("sets", [])),
                 "total_banned_cards": len(catalog.get("banned_cards", [])),
                 "official_sources": [
-                    {"url": POKEMON_CARD_JP_URL, "title": "Official Pokemon Card Japan Regulation"},
-                    {"url": "https://www.pokemon.com/us/pokemon-tcg-banned-card-list/", "title": "Official Play! Pokemon Banned Card List"},
+                    {"url": url, "title": "Retrieved legality catalog source",
+                     "retrieved_at": catalog["sync_state"].get("last_refreshed_at")}
+                    for url in catalog.get("sync_state", {}).get("sources", [])
                 ],
             }
         query = f"site:pokemon.com Pokemon TCG Standard format rotation banned cards {utcnow().date().isoformat()}"

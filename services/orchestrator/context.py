@@ -1,7 +1,7 @@
 """Build bounded multimodal context for the planner."""
 from shared.image_context import MAX_IMAGES
 
-def planning_content(request, history, images):
+def planning_content(request, history, images, preferences=None):
     """Images are real multimodal input, never base64 inside the text prompt."""
     import json
     context=[]
@@ -20,6 +20,6 @@ def planning_content(request, history, images):
     remaining=MAX_IMAGES-len(images)
     selected=(previous[-remaining:] if remaining > 0 else []) + list(images)
     omitted=max(0, len(previous)+len(images)-len(selected))
-    text=json.dumps({"conversation":context, "request":request,
+    text=json.dumps({"conversation":context, "request":request, "shopping_preferences":preferences or {},
                      "image_context":{"included":[image["name"] for image in selected], "older_images_omitted":omitted}})
     return [{"type":"text", "text":text}] + [{"type":"image_url", "image_url":{"url":image["data_url"]}} for image in selected]

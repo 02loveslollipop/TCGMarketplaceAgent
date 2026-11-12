@@ -1,6 +1,6 @@
 """Short transactions and owner-scoped access to durable application state."""
 from contextlib import contextmanager
-from datetime import datetime
+from datetime import datetime, timedelta
 import re
 
 from sqlalchemy import delete, func, or_, select, update
@@ -214,10 +214,12 @@ class Repository:
         with self.transaction() as session:
             pref = session.get(UserPreference, user_id)
             if pref:
-                return {"ruleset": pref.ruleset, "format": pref.format, "updated_at": pref.updated_at.isoformat()}
-            return {"ruleset": "auto", "format": "auto", "updated_at": None}
+                return {"ruleset": pref.ruleset, "format": pref.format, "location": pref.location,
+                        "target_currency": pref.target_currency, "updated_at": pref.updated_at.isoformat()}
+            return {"ruleset": "auto", "format": "auto", "location": "", "target_currency": None, "updated_at": None}
 
-    def save_user_preferences(self, user_id: str, ruleset: str, format_: str | None = None, format: str | None = None) -> dict:
+    def save_user_preferences(self, user_id: str, ruleset: str, format_: str | None = None, format: str | None = None,
+                              *, location: str = "", target_currency: str | None = None) -> dict:
         fmt = format_ if format_ is not None else format
         valid_rulesets = {"auto", "international", "japan"}
         valid_formats = {"auto", "standard", "expanded"}
@@ -236,8 +238,11 @@ class Repository:
                 pref.ruleset = r
                 pref.format = f
                 pref.updated_at = utcnow()
+            pref.location = location.strip()
+            pref.target_currency = target_currency
             session.flush()
-            return {"ruleset": pref.ruleset, "format": pref.format, "updated_at": pref.updated_at.isoformat()}
+            return {"ruleset": pref.ruleset, "format": pref.format, "location": pref.location,
+                    "target_currency": pref.target_currency, "updated_at": pref.updated_at.isoformat()}
 
     def legality_status(self) -> dict:
         with self.transaction() as session:
@@ -267,6 +272,17 @@ class Repository:
                 "sources": row.sources or [],
                 "error": row.error,
             }
+
+    def record_legality_failure(self, triggered_by: str):
+        with self.transaction() as session:
+            row = session.get(LegalitySyncState, "current")
+            if row is None:
+                row = LegalitySyncState(id="current")
+                session.add(row)
+            row.status = "failed"
+            row.triggered_by = triggered_by
+            row.error = "Current rules could not be refreshed. Previous data is retained and remains unverified."
+            row.next_refresh_at = utcnow() + timedelta(hours=1)
 
     def replace_legality_catalog(self, *, sets: list[dict], bans: list[dict], sync_state: dict):
         with self.transaction() as session:

@@ -1,5 +1,6 @@
 """One-shot schema provisioning. This is the only code that reads the admin URI."""
 import os
+import argparse
 from pathlib import Path
 import secrets
 
@@ -45,12 +46,20 @@ def schema_statements(passwords: dict[str, str]) -> list:
         statements.append(str(CreateTable(table, if_not_exists=True).compile(dialect=dialect())))
         for index in table.indexes:
             statements.append(str(CreateIndex(index, if_not_exists=True).compile(dialect=dialect())))
+    statements.extend(preference_migrations())
     for service, tables in SERVICE_TABLES.items():
         for table, grants in tables.items():
             statements.append(sql.SQL("GRANT {} ON TABLE {}.{} TO {}").format(
                 sql.SQL(grants), sql.Identifier(SCHEMA), sql.Identifier(table),
                 sql.Identifier(f"pokemon_poc_{service}")))
     return statements
+
+
+def preference_migrations():
+    """Add preferences without replacing existing accounts or application data."""
+    table = sql.SQL("{}.user_preferences").format(sql.Identifier(SCHEMA))
+    return [sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS location VARCHAR(160) NOT NULL DEFAULT ''").format(table),
+            sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS target_currency VARCHAR(3)").format(table)]
 
 
 def private_write(path: Path, content: str | bytes):
@@ -116,10 +125,22 @@ def runtime_files(values: dict, passwords: dict, admin_info: dict):
 
 
 def main():
+    parser = argparse.ArgumentParser(description="Provision the application's dedicated database schema.")
+    parser.add_argument("--migrate-preferences", action="store_true", help="Only add the buying preference columns; preserve all data and runtime configuration.")
+    args = parser.parse_args()
     values = dotenv_values(".env")
     uri = (values.get("EXTERNAL_JDBC_POSTGRES_URI_ADMIN") or "").removeprefix("jdbc:")
     if not uri:
         raise SystemExit("Root .env requires EXTERNAL_JDBC_POSTGRES_URI_ADMIN.")
+    if args.migrate_preferences:
+        with psycopg.connect(uri, connect_timeout=10) as connection:
+            owner = connection.execute("SELECT nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) FROM pg_namespace WHERE nspname = %s", (SCHEMA,)).fetchone()
+            if not owner or not owner[0]:
+                raise SystemExit("The existing application schema must be owned by this provisioner.")
+            for statement in preference_migrations():
+                connection.execute(statement)
+        print("Updated only pokemon_tcg_poc.user_preferences. Existing data and runtime configuration were preserved.")
+        return
     passwords, existing_passwords = {}, set()
     for service in SERVICE_TABLES:
         path = Path(f".runtime/{service}.env")
