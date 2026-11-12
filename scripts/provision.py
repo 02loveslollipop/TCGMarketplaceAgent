@@ -14,18 +14,21 @@ from sqlalchemy.schema import CreateTable, CreateIndex
 from sqlalchemy.dialects.postgresql import dialect
 
 from shared.db import Base, SCHEMA
+from shared.iam import BUILTIN_ROLE_IDS, DEFAULT_LIMITS, legacy_policy
+from psycopg.types.json import Json
 
 SERVICE_TABLES = {
-    "auth": {"users": "SELECT, INSERT, UPDATE", "challenges": "SELECT, INSERT, UPDATE",
+    "auth": {"iam_roles":"SELECT, INSERT, UPDATE, DELETE", "api_principals":"SELECT, INSERT, UPDATE",
+             "api_tokens":"SELECT, INSERT, UPDATE", "role_policies":"SELECT", "daily_token_usage":"SELECT", "users": "SELECT, INSERT, UPDATE", "challenges": "SELECT, INSERT, UPDATE",
              "webauthn_credentials": "SELECT, INSERT, UPDATE, DELETE", "webauthn_challenges": "SELECT, INSERT, UPDATE",
              "logs": "INSERT", "enrollment_states": "SELECT, INSERT, UPDATE", "recovery_codes": "SELECT, INSERT, UPDATE, DELETE"},
     "admin": {
-        "models": "SELECT, INSERT, UPDATE", "role_policies": "SELECT, INSERT, UPDATE", "logs": "SELECT, INSERT",
+        "iam_roles":"SELECT", "models": "SELECT, INSERT, UPDATE", "role_policies": "SELECT, INSERT, UPDATE", "logs": "SELECT, INSERT",
         "card_sets": "SELECT", "banned_cards": "SELECT", "legality_sync_state": "SELECT, INSERT, UPDATE",
         "executions": "SELECT", "events": "SELECT", "conversations": "SELECT",
     },
     "orchestrator": {
-        "role_policies": "SELECT", "daily_token_usage": "SELECT, INSERT, UPDATE",
+        "iam_roles":"SELECT", "role_policies": "SELECT", "daily_token_usage": "SELECT, INSERT, UPDATE",
         "models": "SELECT", "conversations": "SELECT, INSERT, UPDATE, DELETE",
         "messages": "SELECT, INSERT, DELETE", "executions": "SELECT, INSERT, UPDATE, DELETE",
         "events": "SELECT, INSERT, DELETE", "logs": "SELECT, INSERT", "graph_checkpoints": "SELECT, INSERT, UPDATE, DELETE",
@@ -44,6 +47,9 @@ def schema_statements(passwords: dict[str, str]) -> list:
         statements.append(sql.SQL("GRANT USAGE ON SCHEMA {} TO {}").format(sql.Identifier(SCHEMA), sql.Identifier(role)))
     for table in Base.metadata.sorted_tables:
         statements.append(str(CreateTable(table, if_not_exists=True).compile(dialect=dialect())))
+        if table.name=='users':
+            # Existing installations need the binding column before its index.
+            statements.append(sql.SQL('ALTER TABLE {}.users ADD COLUMN IF NOT EXISTS iam_role_id VARCHAR(36) REFERENCES {}.iam_roles(id)').format(sql.Identifier(SCHEMA),sql.Identifier(SCHEMA)))
         for index in table.indexes:
             statements.append(str(CreateIndex(index, if_not_exists=True).compile(dialect=dialect())))
     statements.extend(preference_migrations())
@@ -60,6 +66,28 @@ def preference_migrations():
     table = sql.SQL("{}.user_preferences").format(sql.Identifier(SCHEMA))
     return [sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS location VARCHAR(160) NOT NULL DEFAULT ''").format(table),
             sql.SQL("ALTER TABLE {} ADD COLUMN IF NOT EXISTS target_currency VARCHAR(3)").format(table)]
+
+
+def migrate_iam(connection):
+    """Only app IAM tables, one user binding column and exact runtime grants."""
+    for table in Base.metadata.sorted_tables:
+        if table.name not in {'iam_roles','api_principals','api_tokens'}:continue
+        connection.execute(str(CreateTable(table,if_not_exists=True).compile(dialect=dialect())))
+        for index in table.indexes:
+            connection.execute(str(CreateIndex(index,if_not_exists=True).compile(dialect=dialect())))
+    connection.execute(sql.SQL("ALTER TABLE {}.users ADD COLUMN IF NOT EXISTS iam_role_id VARCHAR(36) REFERENCES {}.iam_roles(id)").format(sql.Identifier(SCHEMA),sql.Identifier(SCHEMA)))
+    connection.execute(sql.SQL("CREATE INDEX IF NOT EXISTS ix_pokemon_tcg_poc_users_iam_role_id ON {}.users(iam_role_id)").format(sql.Identifier(SCHEMA)))
+    for role,role_id in BUILTIN_ROLE_IDS.items():
+        old=connection.execute(sql.SQL("SELECT daily_token_limit,allowed_model_ids FROM {}.role_policies WHERE role=%s").format(sql.Identifier(SCHEMA)),(role,)).fetchone()
+        limit,models=old if old else (DEFAULT_LIMITS[role],None)
+        connection.execute(sql.SQL("INSERT INTO {}.iam_roles (id,name,description,parent_id,policy,daily_token_limit,created_at,updated_at) VALUES (%s,%s,%s,NULL,%s,%s,now(),now()) ON CONFLICT (id) DO NOTHING").format(sql.Identifier(SCHEMA)),
+                           (role_id,'Administrator' if role=='admin' else 'User','Migrated built-in role; existing model access and quota preserved.',Json(legacy_policy(role,models)),limit))
+    connection.execute(sql.SQL("UPDATE {}.users SET iam_role_id=CASE WHEN role='admin' THEN %s ELSE %s END WHERE iam_role_id IS NULL").format(sql.Identifier(SCHEMA)),(BUILTIN_ROLE_IDS['admin'],BUILTIN_ROLE_IDS['user']))
+    iam_grants={'auth':{'iam_roles':'SELECT, INSERT, UPDATE, DELETE','api_principals':'SELECT, INSERT, UPDATE','api_tokens':'SELECT, INSERT, UPDATE','role_policies':'SELECT','daily_token_usage':'SELECT'},
+                'admin':{'iam_roles':'SELECT'},'orchestrator':{'iam_roles':'SELECT'}}
+    for service,tables in iam_grants.items():
+        for table,grants in tables.items():
+            connection.execute(sql.SQL('GRANT {} ON TABLE {}.{} TO {}').format(sql.SQL(grants),sql.Identifier(SCHEMA),sql.Identifier(table),sql.Identifier('pokemon_poc_'+service)))
 
 
 def private_write(path: Path, content: str | bytes):
@@ -127,11 +155,19 @@ def runtime_files(values: dict, passwords: dict, admin_info: dict):
 def main():
     parser = argparse.ArgumentParser(description="Provision the application's dedicated database schema.")
     parser.add_argument("--migrate-preferences", action="store_true", help="Only add the buying preference columns; preserve all data and runtime configuration.")
+    parser.add_argument('--migrate-iam',action='store_true',help='Only add IAM roles, principal credentials and user role bindings; preserve existing data and runtime secrets.')
     args = parser.parse_args()
     values = dotenv_values(".env")
     uri = (values.get("EXTERNAL_JDBC_POSTGRES_URI_ADMIN") or "").removeprefix("jdbc:")
     if not uri:
         raise SystemExit("Root .env requires EXTERNAL_JDBC_POSTGRES_URI_ADMIN.")
+    if args.migrate_iam:
+        with psycopg.connect(uri,connect_timeout=10) as connection:
+            owner=connection.execute("SELECT nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) FROM pg_namespace WHERE nspname = %s",(SCHEMA,)).fetchone()
+            if not owner or not owner[0]:raise SystemExit('The existing application schema must be owned by this provisioner.')
+            migrate_iam(connection)
+        print('Migrated only application IAM objects and user bindings. Existing quotas, model access, accounts, authenticators and runtime secrets were preserved.')
+        return
     if args.migrate_preferences:
         with psycopg.connect(uri, connect_timeout=10) as connection:
             owner = connection.execute("SELECT nspowner = (SELECT oid FROM pg_roles WHERE rolname = current_user) FROM pg_namespace WHERE nspname = %s", (SCHEMA,)).fetchone()
@@ -170,6 +206,7 @@ def main():
                     connection.execute(sql.SQL("CREATE ROLE {} LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT PASSWORD {}").format(sql.Identifier(role), sql.Literal(password)))
             else:
                 connection.execute(statement)
+        migrate_iam(connection)
         for api_id, label, provider in (("gpt-6-luna","GPT 6 luna","openai"), ("gpt-6.1-terra","GPT 6.1 terra","openai"), ("mistral-medium-latest","Mistral Medium","mistral")):
             connection.execute(sql.SQL("INSERT INTO {}.models (id,label,provider,api_id,enabled) VALUES (%s,%s,%s,%s,false) ON CONFLICT (id) DO NOTHING").format(sql.Identifier(SCHEMA)),(api_id,label,provider,api_id))
         runtime_files(values, passwords, connection.info.get_parameters())

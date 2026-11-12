@@ -4,15 +4,19 @@ from fastapi import Depends, HTTPException, Request, Response
 from fastapi.security import OAuth2PasswordRequestForm
 from pydantic import BaseModel, Field
 from sqlalchemy.exc import IntegrityError
-from shared.api import Principal, application, bearer, require_admin
+from shared.api import application, bearer, require_permission, has_administrative_access
 from services.auth.security import AuthenticationError, hash_password
 from services.auth.webauthn import WebAuthn
+from services.auth.iam import install_iam
+from shared.iam import BUILTIN_ROLE_IDS
+from shared.db import IAMRole
 
 
 class AccountInput(BaseModel):
     username: str = Field(min_length=1, max_length=160, pattern=r"^[A-Za-z0-9_.@-]+$")
     password: str = Field(min_length=12, max_length=256)
     role: str = Field(default="user", pattern=r"^(user|admin)$")
+    iam_role_id: str | None = Field(default=None,max_length=36)
 
 
 class RoleInput(BaseModel):
@@ -120,6 +124,11 @@ def create_app(repo, security, webauthn=None):
             raise HTTPException(401, str(error)) from None
 
     app.state.current = current
+    iam = install_iam(app,repo,security,current)
+
+    def security_current(user=Depends(current)):
+        require_permission(iam.human(user),'account:self:manage')
+        return user
 
     def onboarding(token: str=Depends(bearer)):
         security.current(token,"enrollment")
@@ -151,11 +160,11 @@ def create_app(repo, security, webauthn=None):
         return {"cancelled":True}
 
     @app.get("/recovery/status")
-    def recovery_status(user=Depends(current)):
+    def recovery_status(user=Depends(security_current)):
         return {"remaining":security.recovery_remaining(user)}
 
     @app.post("/recovery/regenerate")
-    def recovery_regenerate(body: CurrentPassword,user=Depends(current)):
+    def recovery_regenerate(body: CurrentPassword,user=Depends(security_current)):
         return security.regenerate_recovery(user,body.password)
 
     @app.post("/recovery/challenge")
@@ -176,12 +185,22 @@ def create_app(repo, security, webauthn=None):
 
     def serialize_session(user):
         credentials=repo.webauthn_credentials(user.id)
-        return {"id":user.id, "username":user.username, "role":user.role, "totp_enrolled":bool(user.totp_secret),
-                "webauthn_enrolled":bool(credentials),"webauthn_credentials_count":len(credentials)}
+        principal=iam.human(user)
+        return {"id":user.id, "username":user.username, "role":principal.role,
+                "role_name":principal.role_name,"iam_role_id":user.iam_role_id,
+                "policy_statements":principal.policy_statements,"principal_type":"user",
+                "totp_enrolled":bool(user.totp_secret),"webauthn_enrolled":bool(credentials),
+                "webauthn_credentials_count":len(credentials)}
 
     @app.get("/session")
-    def session(user=Depends(current)):
-        return serialize_session(user)
+    def session(response:Response,token:str=Depends(bearer)):
+        response.headers['Cache-Control']='no-store'
+        if token.startswith('tcg_api_'):
+            principal=iam.authenticate(token)
+            return {'id':principal.id,'username':principal.username,'role':principal.role,'role_name':principal.role_name,
+                    'policy_statements':principal.policy_statements,'principal_type':'api','key_reference':principal.key_reference,
+                    'totp_enrolled':False,'webauthn_enrolled':False,'webauthn_credentials_count':0}
+        return serialize_session(security.current(token))
 
     from services.auth.portal_session import install_portal_sessions
     install_portal_sessions(app,security,serialize_session,current)
@@ -195,33 +214,43 @@ def create_app(repo, security, webauthn=None):
 
     @app.get("/accounts")
     def accounts(user=Depends(current)):
-        require_admin(Principal(user.id, user.username, user.role))
-        return [{"id":account.id, "username":account.username, "role":account.role, "active":account.active} for account in repo.users()]
+        require_permission(iam.human(user),'admin:accounts:read')
+        return [{"id":account.id, "username":account.username, "role":account.role, "iam_role_id":account.iam_role_id, "role_name":iam.human(account).role_name, "administrative_access":has_administrative_access(iam.human(account)), "active":account.active} for account in repo.users()]
 
     @app.post("/accounts", status_code=201)
     def create_account(body: AccountInput, user=Depends(current)):
-        require_admin(Principal(user.id,user.username,user.role))
+        require_permission(iam.human(user),'admin:accounts:write')
         try:
-            account = repo.add_user(body.username, hash_password(body.password), body.role)
-            return {"id":account.id, "username":account.username, "role":account.role}
+            selected=body.iam_role_id or BUILTIN_ROLE_IDS[body.role]
+            with repo.transaction() as session:
+                role=session.get(IAMRole,selected)
+                if body.iam_role_id and not role:raise HTTPException(422,'Choose an existing IAM role.')
+            require_permission(iam.human(user),'iam:roles:assign','role:'+selected)
+            legacy_role=('admin' if selected==BUILTIN_ROLE_IDS['admin'] else 'user') if role else body.role
+            account = repo.add_user(body.username, hash_password(body.password), legacy_role, selected if role else None)
+            return {"id":account.id, "username":account.username, "role":account.role,"iam_role_id":account.iam_role_id,"role_name":iam.human(account).role_name}
         except IntegrityError:
             raise HTTPException(409, "Username already exists.") from None
 
     @app.put("/accounts/{user_id}/role")
     def change_role(user_id: str,body: RoleInput,user=Depends(current)):
-        require_admin(Principal(user.id,user.username,user.role))
-        try:return security.change_role(user,user_id,body.role)
+        require_permission(iam.human(user),'admin:accounts:write','account:'+user_id)
+        require_permission(iam.human(user),'iam:roles:assign','role:'+BUILTIN_ROLE_IDS[body.role])
+        try:
+            with repo.transaction() as session:
+                migrated=session.get(IAMRole,BUILTIN_ROLE_IDS[body.role]) is not None
+            return iam.assign_human_role(user,user_id,BUILTIN_ROLE_IDS[body.role]) if migrated else security.change_role(user,user_id,body.role)
         except ValueError as error:raise HTTPException(409,str(error)) from None
 
     @app.post("/totp/enrollment")
-    def enrollment(user=Depends(current)):
+    def enrollment(user=Depends(security_current)):
         try:
             return security.enroll_totp(user)
         except ValueError as error:
             raise HTTPException(409,str(error)) from None
 
     @app.post("/totp/confirmation")
-    def confirmation(body: TotpCode, user=Depends(current)):
+    def confirmation(body: TotpCode, user=Depends(security_current)):
         try:
             security.confirm_totp(user,body.code)
             return {"enrolled":True, "sign_in_again":True}
@@ -236,18 +265,18 @@ def create_app(repo, security, webauthn=None):
             raise HTTPException(401,str(error)) from None
 
     @app.get("/webauthn/credentials")
-    def authenticators(user=Depends(current)):
+    def authenticators(user=Depends(security_current)):
         return [{"id":row.id,"name":row.name,"created_at":row.created_at.isoformat(),"device_type":row.device_type,"backed_up":row.backed_up} for row in repo.webauthn_credentials(user.id)]
 
     @app.post("/webauthn/registration/options")
-    def registration_options(body: WebAuthnName,user=Depends(current)):
+    def registration_options(body: WebAuthnName,user=Depends(security_current)):
         try:
             return webauthn.begin_registration(user,body.name)
         except ValueError as error:
             raise HTTPException(422,str(error)) from None
 
     @app.post("/webauthn/registration/verify")
-    def registration_verify(body: WebAuthnProof,user=Depends(current)):
+    def registration_verify(body: WebAuthnProof,user=Depends(security_current)):
         return webauthn.finish_registration(user,body.challenge_id,body.credential)
 
     @app.post("/webauthn/authentication/options")
@@ -267,11 +296,12 @@ def create_app(repo, security, webauthn=None):
             if not authorization.startswith("Bearer "):
                 raise AuthenticationError("An authenticated session is required.")
             user=security.current(authorization[7:])
+            require_permission(iam.human(user),'account:self:manage')
         webauthn.cancel(user,challenge_id)
         return {"cancelled":True}
 
     @app.delete("/webauthn/credentials/{credential_id}")
-    def remove_authenticator(credential_id: str,user=Depends(current)):
+    def remove_authenticator(credential_id: str,user=Depends(security_current)):
         try:
             return webauthn.remove(user,credential_id)
         except ValueError as error:

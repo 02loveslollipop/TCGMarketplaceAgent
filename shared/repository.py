@@ -37,7 +37,7 @@ def redact(value):
     if isinstance(value, list):
         return [redact(item) for item in value]
     if isinstance(value, str):
-        return re.sub(r"(?i)(bearer\s+|(?:sk-|apify_api_))[\w.\-]+", "[REDACTED]", value)
+        return re.sub(r"(?i)(bearer\s+|(?:sk-|apify_api_|tcg_api_))[\w.\-]+", "[REDACTED]", value)
     return value
 
 
@@ -50,9 +50,9 @@ class Repository:
         with self.sessions() as session, session.begin():
             yield session
 
-    def add_user(self, username: str, password_hash: str, role="user") -> User:
+    def add_user(self, username: str, password_hash: str, role="user", iam_role_id=None) -> User:
         with self.transaction() as session:
-            user = User(username=username, password_hash=password_hash, role=role)
+            user = User(username=username, password_hash=password_hash, role=role, iam_role_id=iam_role_id)
             session.add(user)
             session.flush()
             return user

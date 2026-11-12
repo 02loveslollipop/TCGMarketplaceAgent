@@ -15,6 +15,10 @@ def test_only_dedicated_schema_and_explicit_service_grants():
     assert grants and all("ALL PRIVILEGES" not in value and "CREATE" not in value for value in grants)
     assert not any('users TO "pokemon_poc_orchestrator"' in value for value in grants)
     assert not any("DEFAULT PRIVILEGES" in value for value in rendered)
+    binding=next(i for i,value in enumerate(rendered) if 'ADD COLUMN IF NOT EXISTS iam_role_id' in value)
+    index=next(i for i,value in enumerate(rendered) if value.startswith('CREATE INDEX') and 'users_iam_role_id' in value)
+    assert binding<index
+    assert 'api_tokens' not in SERVICE_TABLES['admin'] and 'api_tokens' not in SERVICE_TABLES['orchestrator']
 
 
 def test_runtime_files_writes_session_limit_defaults(tmp_path, monkeypatch):

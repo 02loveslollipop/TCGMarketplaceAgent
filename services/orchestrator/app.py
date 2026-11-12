@@ -4,7 +4,7 @@ import json
 from fastapi import Depends, HTTPException, Request
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
-from shared.api import application, require_admin
+from shared.api import application, require_permission
 from shared.contracts import ChatInput, ConversationRenamePayload, Decision, UserPreferencesPayload
 from shared.repository import NotFound
 from services.admin.app import serialize_model
@@ -17,6 +17,7 @@ from services.orchestrator.exchange import exchange_rates, ExchangeUnavailable
 class VerificationInput(BaseModel):
     provider: str = Field(pattern=r"^(openai|mistral)$")
     api_id: str = Field(min_length=1,max_length=160)
+    model_id: str | None = Field(default=None,min_length=1,max_length=160)
 
 
 def create_app(repo, current, agent_factory, verifier=verify_api_id):
@@ -48,15 +49,17 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.get("/models")
     def models(user=Depends(current)):
+        require_permission(user,'agent:models:list')
         return [serialize_model(policy) for policy in repo.models(enabled_only=True) if RolePolicies(repo).model_allowed(user.role,policy.id)]
 
     @app.get("/usage")
     def usage(user=Depends(current)):
+        require_permission(user,'agent:usage:read')
         return RolePolicies(repo).usage(user.id,user.role)
 
     @app.post("/internal/models/verify")
     async def verify_model(body: VerificationInput,user=Depends(current)):
-        require_admin(user)
+        require_permission(user,'admin:models:write','model:'+body.model_id if body.model_id else '*')
         try:
             return {"available":await verifier(body.provider,body.api_id)}
         except ModelUnavailable as error:
@@ -64,10 +67,12 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.get("/conversations")
     def conversations(user=Depends(current)):
+        require_permission(user,'agent:conversations:read')
         return [{"id":row.id,"title":row.title} for row in repo.conversations(user.id)]
 
     @app.put("/conversations/{conversation_id}")
     def rename_conversation(conversation_id: str, body: ConversationRenamePayload, user=Depends(current)):
+        require_permission(user,'agent:conversations:write','conversation:'+conversation_id)
         try:
             row = repo.rename_conversation(conversation_id, user.id, body.title)
             return {"id": row.id, "title": row.title}
@@ -78,6 +83,7 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.delete("/conversations/{conversation_id}")
     def delete_conversation(conversation_id: str, user=Depends(current)):
+        require_permission(user,'agent:conversations:delete','conversation:'+conversation_id)
         try:
             repo.delete_conversation(conversation_id, user.id)
             return {"deleted": True, "id": conversation_id}
@@ -86,10 +92,12 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.get("/preferences")
     def get_preferences(user=Depends(current)):
+        require_permission(user,'agent:preferences:read')
         return repo.user_preferences(user.id)
 
     @app.get("/currencies")
     async def currencies(user=Depends(current)):
+        require_permission(user,'agent:preferences:read')
         try:
             return await exchange_rates.currencies()
         except ExchangeUnavailable as error:
@@ -97,6 +105,7 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.put("/preferences")
     def update_preferences(body: UserPreferencesPayload, user=Depends(current)):
+        require_permission(user,'agent:preferences:write')
         try:
             return repo.save_user_preferences(user.id, body.ruleset, body.format,
                                               location=body.location, target_currency=body.target_currency)
@@ -105,22 +114,22 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.get("/internal/legality/status")
     def internal_legality_status(user=Depends(current)):
-        require_admin(user)
+        require_permission(user,'admin:legality:read')
         return repo.legality_status()
 
     @app.post("/internal/legality/refresh")
     def internal_legality_refresh(user=Depends(current)):
-        require_admin(user)
+        require_permission(user,'admin:legality:refresh')
         return sync_legality(repo, triggered_by=f"admin:{user.username}")
 
     @app.get("/internal/activity")
     def internal_activity(user=Depends(current)):
-        require_admin(user)
+        require_permission(user,'admin:activity:read')
         return repo.admin_executions(limit=50)
 
     @app.get("/internal/activity/{execution_id}")
     def internal_activity_detail(execution_id: str, user=Depends(current)):
-        require_admin(user)
+        require_permission(user,'admin:activity:read','execution:'+execution_id)
         try:
             return repo.admin_execution_detail(execution_id)
         except NotFound:
@@ -128,10 +137,12 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.get("/conversations/{conversation_id}")
     def history(conversation_id: str,user=Depends(current)):
+        require_permission(user,'agent:conversations:read','conversation:'+conversation_id)
         return [{"role":row.role,"content":row.content,"created_at":row.created_at.isoformat()} for row in repo.history(conversation_id,user.id)]
 
     @app.get("/executions/{execution_id}")
     def execution(execution_id: str,user=Depends(current)):
+        require_permission(user,'agent:executions:read','execution:'+execution_id)
         row = repo.execution(execution_id,user.id)
         return {"id":row.id,"conversation_id":row.conversation_id,"status":row.status,"checkpoint":row.checkpoint,
                 "events":[{"type":event.kind,"data":event.payload} for event in repo.events(execution_id,user.id)]}
@@ -180,11 +191,17 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.post("/executions")
     async def start(body: ChatInput,request: Request,user=Depends(current)):
+        require_permission(user,'agent:executions:create')
         policy = await allowed(body.model_id,user)
         conversation = repo.conversation(body.conversation_id,user.id) if body.conversation_id else repo.new_conversation(user.id,body.text or "Image context")
         history = [{"role":row.role,"content":row.content} for row in repo.history(conversation.id,user.id)]
         repo.add_message(conversation.id,user.id,"user",{"text":body.text, "images":[image.model_dump() for image in body.images]})
         execution = repo.new_execution(conversation.id,user.id,policy.id)
+        from shared.db import AuditLog
+        with repo.transaction() as session:
+            session.add(AuditLog(execution_id=execution.id,action='execution_identity',details={
+                'principal_id':user.id,'principal_type':getattr(user,'principal_type','user'),
+                'key_reference':getattr(user,'key_reference',None)}))
         preferences = repo.user_preferences(user.id)
         return stream_response(
             request,
@@ -201,6 +218,7 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
 
     @app.post("/executions/{execution_id}/resume")
     async def resume(execution_id: str,body: Decision,request: Request,user=Depends(current)):
+        require_permission(user,'agent:executions:resume','execution:'+execution_id)
         execution = repo.execution(execution_id,user.id)
         if execution.status != "waiting":
             raise HTTPException(409,"Execution is not waiting for an answer.")

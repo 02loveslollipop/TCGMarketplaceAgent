@@ -5,9 +5,9 @@ from uuid import uuid4
 from sqlalchemy import select
 from shared.db import RolePolicy, DailyTokenUsage, AuditLog
 from shared.contracts import utcnow
+from shared.iam import BUILTIN_ROLE_IDS, DEFAULT_LIMITS, resolve_role, permitted, IAMError
 
 TOKYO=ZoneInfo('Asia/Tokyo')
-DEFAULT_LIMITS={'user':50_000,'admin':200_000}
 
 class PolicyError(Exception):
     def __init__(self,message,status=429):
@@ -24,11 +24,18 @@ def usage_day(now=None):
 
 
 def read_policy(session,role):
-    if role not in DEFAULT_LIMITS:
-        raise PolicyError('This account role cannot use agent models.',403)
-    policy=session.get(RolePolicy,role)
-    return {'role':role,'daily_token_limit':policy.daily_token_limit if policy else DEFAULT_LIMITS[role],
-            'allowed_model_ids':policy.allowed_model_ids if policy else None,'reset_timezone':'Asia/Tokyo'}
+    try:resolved=resolve_role(session,role)
+    except IAMError as error:raise PolicyError(str(error),error.status) from None
+    from shared.db import ModelPolicy
+    builtin_key=next((key for key,value in BUILTIN_ROLE_IDS.items() if resolved['id'] in {key,value}),None)
+    allowed=[model.id for model in session.scalars(select(ModelPolicy))
+             if permitted(resolved['statements'],'agent:models:invoke','model:'+model.id)]
+    return {'role':role,'role_name':resolved['name'],'builtin_key':builtin_key,'daily_token_limit':resolved['daily_token_limit'],
+            'allowed_model_ids':allowed,'reset_timezone':'Asia/Tokyo','statements':resolved['statements']}
+
+
+def public_policy(policy):
+    return {key:value for key,value in policy.items() if key!='statements'}
 
 
 class RolePolicies:
@@ -36,23 +43,45 @@ class RolePolicies:
 
     def policies(self):
         with self.repo.transaction() as session:
-            return [read_policy(session,role) for role in DEFAULT_LIMITS]
+            from shared.db import IAMRole,ModelPolicy
+            roles=list(session.scalars(select(IAMRole).order_by(IAMRole.name)))
+            if roles:
+                return [public_policy(read_policy(session,role.id)) for role in roles]
+            return [self._legacy_policy_view(session,role) for role in DEFAULT_LIMITS]
+
+    @staticmethod
+    def _legacy_policy_view(session,role):
+        from shared.db import IAMRole
+        from shared.iam import BUILTIN_ROLE_IDS
+        if session.get(IAMRole,BUILTIN_ROLE_IDS[role]):
+            from shared.db import ModelPolicy
+            policy=read_policy(session,role)
+            policy['allowed_model_ids']=[model.id for model in session.scalars(select(ModelPolicy))
+                                         if permitted(policy['statements'],'agent:models:invoke','model:'+model.id)]
+            return public_policy(policy)
+        old=session.get(RolePolicy,role)
+        return {'role':role,'daily_token_limit':old.daily_token_limit if old else DEFAULT_LIMITS[role],
+                'allowed_model_ids':old.allowed_model_ids if old else None,'reset_timezone':'Asia/Tokyo'}
 
     def save(self,role,limit,models,actor):
         with self.repo.transaction() as session:
             if role not in DEFAULT_LIMITS:raise PolicyError('Unknown role.',422)
+            from shared.db import IAMRole
+            from shared.iam import BUILTIN_ROLE_IDS
+            if session.get(IAMRole,BUILTIN_ROLE_IDS[role]):
+                raise PolicyError('Manage this role through IAM roles and policies.',409)
             row=session.get(RolePolicy,role)
             if row is None:
                 row=RolePolicy(role=role);session.add(row)
             row.daily_token_limit=limit;row.allowed_model_ids=models
             session.add(AuditLog(action='role_policy_changed',details={'actor_id':actor,'role':role,'daily_limit':limit,'model_ids':models}))
             session.flush()
-            return read_policy(session,role)
+            return self._legacy_policy_view(session,role)
 
     def model_allowed(self,role,model_id):
         with self.repo.transaction() as session:
             policy=read_policy(session,role)
-            return policy['allowed_model_ids'] is None or model_id in policy['allowed_model_ids']
+            return permitted(policy['statements'],'agent:models:invoke','model:'+model_id)
 
     @staticmethod
     def check(row,limit,now):
@@ -73,7 +102,7 @@ class RolePolicies:
             policy=read_policy(session,role)
             row=session.get(DailyTokenUsage,(user_id,day))
             used=row.total_tokens if row else 0
-            return {**policy,'usage_date':day.isoformat(),'input_tokens':row.input_tokens if row else 0,
+            return {**public_policy(policy),'usage_date':day.isoformat(),'input_tokens':row.input_tokens if row else 0,
                     'output_tokens':row.output_tokens if row else 0,'total_tokens':used,
                     'remaining_tokens':max(0,policy['daily_token_limit']-used),'reset_at':reset.isoformat(),
                     'in_progress':bool(row and row.active_call_id),
@@ -82,7 +111,7 @@ class RolePolicies:
     def check_available(self,user_id,role,model_id):
         with self.repo.transaction() as session:
             policy=read_policy(session,role)
-            if policy['allowed_model_ids'] is not None and model_id not in policy['allowed_model_ids']:
+            if not permitted(policy['statements'],'agent:models:invoke','model:'+model_id):
                 raise PolicyError('This model is not enabled for your role.',403)
             self.check(session.get(DailyTokenUsage,(user_id,usage_day())),policy['daily_token_limit'],utcnow())
 
@@ -90,7 +119,7 @@ class RolePolicies:
         now=utcnow();day=usage_day(now);call_id=str(uuid4())
         with self.repo.transaction() as session:
             policy=read_policy(session,role)
-            if policy['allowed_model_ids'] is not None and model_id not in policy['allowed_model_ids']:
+            if not permitted(policy['statements'],'agent:models:invoke','model:'+model_id):
                 raise PolicyError('This model is not enabled for your role.',403)
             # Insert once, then lock the user's daily row before admitting a call.
             if session.bind.dialect.name=='postgresql':

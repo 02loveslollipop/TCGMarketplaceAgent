@@ -18,18 +18,56 @@ class Base(DeclarativeBase):
     metadata = MetaData(schema=SCHEMA)
 
 
+class IAMRole(Base):
+    __tablename__ = "iam_roles"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    parent_id: Mapped[str | None] = mapped_column(ForeignKey(f"{SCHEMA}.iam_roles.id"))
+    policy: Mapped[dict] = mapped_column(JSON, default=dict)
+    daily_token_limit: Mapped[int | None] = mapped_column(BigInteger)
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
 class User(Base):
     __tablename__ = "users"
     id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
     username: Mapped[str] = mapped_column(String(160), unique=True)
     password_hash: Mapped[str] = mapped_column(Text)
     role: Mapped[str] = mapped_column(String(16), default="user")
+    iam_role_id: Mapped[str | None] = mapped_column(ForeignKey(f"{SCHEMA}.iam_roles.id"), index=True)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     totp_secret: Mapped[str | None] = mapped_column(Text)
     totp_pending: Mapped[str | None] = mapped_column(Text)
     totp_last_step: Mapped[int] = mapped_column(Integer, default=-1)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class APIPrincipal(Base):
+    __tablename__ = "api_principals"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    description: Mapped[str] = mapped_column(String(500), default="")
+    role_id: Mapped[str] = mapped_column(ForeignKey(f"{SCHEMA}.iam_roles.id"), index=True)
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    updated_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+
+
+class APIToken(Base):
+    __tablename__ = "api_tokens"
+    id: Mapped[str] = mapped_column(String(36), primary_key=True, default=identifier)
+    principal_id: Mapped[str] = mapped_column(ForeignKey(f"{SCHEMA}.api_principals.id"), index=True)
+    name: Mapped[str] = mapped_column(String(80))
+    secret_hash: Mapped[str] = mapped_column(String(64))
+    created_by: Mapped[str] = mapped_column(String(36))
+    created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utcnow)
+    expires_at: Mapped[datetime] = mapped_column(DateTime(timezone=True))
+    revoked_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
+    last_used_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True))
 
 
 class Challenge(Base):

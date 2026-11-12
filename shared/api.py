@@ -9,6 +9,7 @@ from fastapi.responses import JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.security import OAuth2PasswordBearer
 from shared.repository import NotFound
+from shared.iam import ACTIONS, legacy_policy, permitted
 
 bearer = OAuth2PasswordBearer(tokenUrl="/api/auth/token")
 
@@ -19,6 +20,10 @@ class Principal:
     username: str
     role: str
     token: str = ""
+    principal_type: str = "user"
+    role_name: str = ""
+    policy_statements: list | None = None
+    key_reference: str | None = None
 
 
 def application(title: str, *, credentialed=False) -> FastAPI:
@@ -67,13 +72,35 @@ def remote_auth(auth_url: str):
             if response.status_code != 200:
                 raise HTTPException(401, "Invalid or expired session.")
             user = response.json()
-            return Principal(user["id"], user["username"], user["role"], token)
+            return Principal(user["id"], user["username"], user["role"], token,
+                             user.get("principal_type", "user"), user.get("role_name", ""),
+                             user.get("policy_statements"), user.get("key_reference"))
         except httpx.RequestError:
             raise HTTPException(503, "Authentication service is unavailable.") from None
     return current
 
 
 def require_admin(principal: Principal) -> Principal:
-    if principal.role != "admin":
+    if not has_administrative_access(principal):
         raise HTTPException(403, "Administrator role required.")
     return principal
+
+
+def has_permission(principal: Principal, action: str, resource="*") -> bool:
+    statements = getattr(principal, "policy_statements", None)
+    kind = getattr(principal, "principal_type", "user")
+    if statements is None:
+        if kind != "user" or principal.role not in {"user", "admin"}:
+            return False
+        statements = legacy_policy(principal.role)["statements"]
+    return permitted(statements, action, resource, principal_type=kind)
+
+
+def require_permission(principal: Principal, action: str, resource="*") -> Principal:
+    if not has_permission(principal, action, resource):
+        raise HTTPException(403, "The assigned IAM policy does not permit this operation.")
+    return principal
+
+
+def has_administrative_access(principal: Principal) -> bool:
+    return any(has_permission(principal, action) for action in ACTIONS if action.startswith(("admin:", "iam:")))
