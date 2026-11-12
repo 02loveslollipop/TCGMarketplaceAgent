@@ -302,3 +302,7 @@ flowchart LR
 3. **Token Accounting & Quotas**: Real-time token usage is tracked per account across all LangChain/LLM calls. Daily token allowances (e.g. 50,000 for Users, 200,000 for Admins) reset at midnight JST, preventing runaway API expenditures.
 4. **Resilient Human-in-the-Loop Orchestration**: State checkpoints are stored in `pokemon_tcg_poc.graph_checkpoints`. The agent pauses when asking questions or presenting deck reviews, freeing resources until the user submits a decision.
 5. **Native Cloudscape UX**: Both the Chat Portal and Admin Portal are crafted with AWS's Cloudscape Design System, providing responsive data tables, modal review panels, reasoning disclosure traces, and dark/light mode theming.
+
+### Custom IAM and programmatic testing
+
+See [IAM roles and managed API tokens](docs/security/iam.md) for inherited policies, explicit Deny, per-principal quotas, the admin token flow, CLI usage and the additive migration.
