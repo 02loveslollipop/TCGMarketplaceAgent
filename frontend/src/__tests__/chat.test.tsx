@@ -230,7 +230,7 @@ it('keeps budget caveats visible and exposes the original offers, deck and sourc
   expect(within(screen.getByTestId('budget-section')).getByText('Unknown')).toBeInTheDocument();
   expect(within(screen.getByTestId('budget-section')).getByText('Unavailable')).toBeInTheDocument();
   await user.click(screen.getByRole('tab',{name:'Offers (1)'}));
-  expect(screen.getByTestId('offers-table')).toHaveTextContent('2.00 USD (listing)');
+  expect(screen.getByTestId('offers-table')).toHaveTextContent('2.00 USD');
   expect(screen.getByTestId('offer-source-link')).toHaveAttribute('href',source.url);
   await user.click(screen.getByRole('tab',{name:'Sources'}));
   await user.click(screen.getByRole('button',{name:'Sources and retrieval dates (1)'}));

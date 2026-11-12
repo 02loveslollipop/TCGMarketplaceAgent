@@ -92,8 +92,11 @@ Docker build contexts and is not mounted into runtime services. The optional
 `setup` profile may rerun provisioning after host initialization creates the
 runtime folder, using `docker compose --profile setup run --rm provision`.
 
-Live supplier retrieval is enabled whenever `APIFY_API_KEY` (or `APIFY_TOKEN`) is
-present. The adapter uses `crawloop/tcgplayer-listings-scraper` with proxies
+Live supplier retrieval requires `APIFY_LIVE_SCRAPE=true` and `APIFY_API_KEY` (or
+`APIFY_TOKEN`). Otherwise the adapter can retrieve TCGdex price-guide references
+from both marketplaces. References have unknown stock, condition, and language;
+they never satisfy purchase coverage or produce a confirmed budget. The live
+adapter uses `crawloop/tcgplayer-listings-scraper` with proxies
 disabled and `phantom_coder/cardmarket-listings-scraper` with paid fair-value
 enrichment disabled. Both Actors read publicly accessible, logged-out listings;
 do not bypass a login, paywall, CAPTCHA or other technical block, and collect no
@@ -112,6 +115,33 @@ Reference market values never become purchasable listings. Budgets allocate stoc
 once, separate currencies and product/shipping totals, and retain missing cards
 only after explicit consent scoped to the displayed missing set.
 
+Deck requests pause after card review and before supplier pricing. Approve the
+displayed deck to continue, request changes to generate a revised review, or
+cancel. A revision or researched substitution requires a fresh approval. The
+final artifact is the buying budget, with separate price-guide estimates when
+seller quotations cannot establish coverage. Headless runs must explicitly pass
+`--approve-deck` to approve generated decks automatically.
+
+Agent preferences are available from the chat navigation settings action and
+the account menu. Ruleset and format retain Auto options. Shopping location is
+optional research guidance, never a hard supplier or card-language restriction.
+Each execution keeps the preferences captured when it started.
+
+Selecting a target currency makes converted estimates the primary price view;
+original supplier amounts remain secondary and can be selected as the main view.
+Exchange rates, their date, and attribution are displayed with the budget. The
+server uses the free, keyless [ExchangeRate-API open endpoint](https://www.exchangerate-api.com/docs/free),
+caches rates until the next update (up to 24 hours), and preserves original
+prices if conversion fails. Totals use currency minor-unit precision, while
+converted unit prices retain fractional precision for low-value cards. FX never
+confirms stock, shipping, taxes, card issuer fees, or a final settlement amount.
+No new API credential is required.
+
+For an existing database, add the buying preference columns with
+`python -m scripts.provision --migrate-preferences` before running the updated
+services. This idempotent command modifies only `pokemon_tcg_poc.user_preferences`
+and preserves existing preferences, accounts, credentials, and runtime files.
+
 The LangGraph uses SQL-backed checkpoints in `pokemon_tcg_poc.graph_checkpoints`.
 It stores the latest checkpoint per execution, including human interruptions,
 without offering time-travel history. Owner checks precede resume. Research has
@@ -119,7 +149,11 @@ bounded tools, up to60 cards per metadata batch, six parallel metadata requests,
 and a 120-request research ceiling. Free search and authoritative legality sources
 may be unavailable; results then retain a dated unverified-legality status.
 Long research emits progress and SSE heartbeats. Disconnects cancel execution.
-Authentication expires after15 minutes; sign in again when the session expires.
+Access tokens default to eight hours (`ACCESS_TOKEN_TTL_MINUTES=480`). Browser
+sessions renew while in use, with a seven-day absolute limit
+(`MAX_SESSION_HOURS=168`); renewed tokens cannot extend past that limit.
+Expired tokens can renew only within `REFRESH_GRACE_SECONDS` (default one day)
+and only while their account, authenticator state, and token version remain valid.
 
 New accounts must confirm an authenticator app or a passkey/security key before
 they can use chat or administration. Setup shows recovery codes once; save them

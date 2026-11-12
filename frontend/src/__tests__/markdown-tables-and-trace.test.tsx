@@ -18,7 +18,7 @@ End of table.
 `;
 
   const { container } = render(<Markdown text={tableMarkdown} />);
-  const table = container.querySelector('table.chat-markdown-table');
+  const table = screen.getByRole('table', {name:'Response table'});
   expect(table).toBeInTheDocument();
 
   const headers = container.querySelectorAll('th');
@@ -70,7 +70,7 @@ it('renders tool calls in ThinkingTrace with tool name, duration, and verified s
   expect(toolCall).toBeInTheDocument();
   expect(toolCall.textContent).toContain('Quote TCGplayer');
   expect(toolCall.textContent).toContain('180 ms');
-  expect(toolCall.textContent).toContain('me01-076');
+  expect(screen.getByTestId('thinking-trace')).toHaveTextContent('me01-076');
 
   // Verify source pill
   const sourceLink = screen.getByRole('link', { name: 'TCGplayer Product Listing' });

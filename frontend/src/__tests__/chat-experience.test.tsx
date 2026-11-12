@@ -12,6 +12,35 @@ const result:Result={plan:{format:'expanded',cards:[],sources:[],explanation:'Fi
 function defaults(path:string){if(path.endsWith('/models'))return json([model]);if(path.endsWith('/usage'))return json(usage);if(path.endsWith('/conversations'))return json([]);return sse([completed]);}
 afterEach(()=>vi.unstubAllGlobals());
 
+it('keeps the selected model and active stream when the session token renews',async()=>{
+  let signal:AbortSignal|undefined;
+  let emit!:ReadableStreamDefaultController<Uint8Array>;
+  const secondModel={...model,id:'second-model',label:'Second model'};
+  vi.stubGlobal('fetch',vi.fn(async(path:string,options?:RequestInit)=>{
+    if(path.endsWith('/models'))return json([model,secondModel]);
+    if(!path.endsWith('/executions'))return defaults(path);
+    signal=options?.signal as AbortSignal;
+    return new Response(new ReadableStream({start(controller){emit=controller;}}));
+  }));
+  const user=userEvent.setup();
+  const view=render(<Chat token="old-session"/>);
+  await screen.findByText('Test model');
+  await user.click(screen.getByRole('button',{name:/^Model /}));
+  await user.click(screen.getByRole('option',{name:/Second model/}));
+  await user.type(screen.getByRole('textbox',{name:'Purchase request'}),'Research cards');
+  await user.click(screen.getByRole('button',{name:'Send request'}));
+  await screen.findByRole('button',{name:'Stop execution'});
+  view.rerender(<Chat token="renewed-session"/>);
+  await waitFor(()=>expect(vi.mocked(fetch).mock.calls.filter(call=>String(call[0]).endsWith('/models'))).toHaveLength(2));
+  expect(signal?.aborted).toBe(false);
+  expect(screen.getByRole('button',{name:/^Model /})).toHaveTextContent('Second model');
+  await act(async()=>{
+    emit.enqueue(new TextEncoder().encode('event: done\ndata: {"status":"complete"}\n\n'));
+    emit.close();
+  });
+  await waitFor(()=>expect(screen.queryByRole('button',{name:'Stop execution'})).not.toBeInTheDocument());
+});
+
 it('inserts an editable starter prompt without sending a model request',async()=>{
   vi.stubGlobal('fetch',vi.fn(async(path:string)=>defaults(path)));
   const user=userEvent.setup();render(<Chat token="fixture"/>);await screen.findByText('Test model');

@@ -6,6 +6,9 @@ import {
   Container,
   FormField,
   Header,
+  Box,
+  KeyValuePairs,
+  ExpandableSection,
   RadioGroup,
   SpaceBetween,
   Textarea,
@@ -26,7 +29,9 @@ export function DecisionPanel({
   const [text, setText] = useState('');
   const [selectedOption, setSelectedOption] = useState<string>('');
   const [approved, setApproved] = useState(false);
+  const [editingDeck, setEditingDeck] = useState(false);
   const missing = question.kind === 'missing_cards';
+  const deckApproval = question.kind === 'deck_approval';
   const heading = useRef<HTMLSpanElement>(null);
 
   useEffect(() => {
@@ -38,6 +43,7 @@ export function DecisionPanel({
     }
     setText('');
     setApproved(false);
+    setEditingDeck(false);
   }, [question]);
 
   const hasOptions = Array.isArray(question.options) && question.options.length > 0;
@@ -73,12 +79,39 @@ export function DecisionPanel({
       ]
     : [];
 
+  if(deckApproval)return <Container header={<Header variant="h2"><span className="chat-decision-heading" ref={heading} tabIndex={-1}>{editingDeck?'Request deck changes':'Approve this deck'}</span></Header>}>
+    <SpaceBetween size="s">
+      <Box>{question.card_count??60} cards · {question.unique_cards??'—'} printings · {question.format}</Box>
+      {editingDeck?<>
+        <FormField label="Changes to this deck" description="The revised deck will need your approval before pricing.">
+          <Textarea value={text} disabled={busy} rows={2} onChange={({detail})=>setText(detail.value)} nativeTextareaAttributes={settingsInputAttributes}/>
+        </FormField>
+        <SpaceBetween direction="horizontal" size="xs">
+          <Button variant="primary" disabled={busy||!text.trim()} onClick={()=>onDecision({action:'revise_deck',text:text.trim()})}>Submit deck changes</Button>
+          <Button variant="link" disabled={busy} onClick={()=>setEditingDeck(false)}>Back to approval</Button>
+        </SpaceBetween>
+      </>:<>
+        <Box>Continue to supplier prices and your buying budget.</Box>
+        <SpaceBetween direction="horizontal" size="xs">
+          <Button variant="primary" disabled={busy} onClick={()=>onDecision({action:'approve_deck',approved:true})}>Approve and price this deck</Button>
+          <Button disabled={busy} onClick={()=>setEditingDeck(true)}>Request changes</Button>
+          <Button variant="link" disabled={busy} onClick={()=>onDecision({action:'cancel'})}>Cancel</Button>
+        </SpaceBetween>
+        <ExpandableSection headerText="Buying preferences"><KeyValuePairs columns={2} items={[
+          {label:'Ruleset',value:question.ruleset||'Auto'},
+          {label:'Location guide',value:question.location||'Not specified'},
+          {label:'Target currency',value:question.target_currency||'Original supplier currencies'},
+        ]}/></ExpandableSection>
+      </>}
+    </SpaceBetween>
+  </Container>;
+
   return (
     <Container
       header={
         <Header variant="h2">
           <span className="chat-decision-heading" ref={heading} tabIndex={-1}>
-            {missing ? 'How should we handle the missing cards?' : 'One detail before continuing'}
+            {deckApproval ? 'Approve this deck for pricing' : missing ? 'How should we handle the missing cards?' : 'One detail before continuing'}
           </span>
         </Header>
       }
@@ -123,7 +156,7 @@ export function DecisionPanel({
 
         {question.guidance && <Markdown content={question.guidance} />}
 
-        {!missing && hasOptions && (
+        {!deckApproval && !missing && hasOptions && (
           <FormField label="Suggested options" description="Select a recommended option or enter custom guidance below:">
             <RadioGroup
               value={selectedOption}
@@ -133,7 +166,7 @@ export function DecisionPanel({
           </FormField>
         )}
 
-        {(!hasOptions || isOther || missing) && (
+        {!deckApproval && (!hasOptions || isOther || missing) && (
           <FormField
             label={missing ? 'Substitutes to research' : hasOptions ? 'Specify custom answer' : 'Your answer'}
           >
@@ -160,7 +193,7 @@ export function DecisionPanel({
           </Checkbox>
         )}
 
-        <SpaceBetween size="s" direction="horizontal">
+        {!deckApproval&&<SpaceBetween size="s" direction="horizontal">
           {missing ? (
             <>
               {question.actions.includes('substitute') && (
@@ -203,7 +236,7 @@ export function DecisionPanel({
               Cancel execution
             </Button>
           )}
-        </SpaceBetween>
+        </SpaceBetween>}
       </SpaceBetween>
     </Container>
   );

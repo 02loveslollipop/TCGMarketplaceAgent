@@ -1,164 +1,71 @@
-import React, { useEffect, useState } from 'react';
-import Container from '@cloudscape-design/components/container';
-import Header from '@cloudscape-design/components/header';
-import FormField from '@cloudscape-design/components/form-field';
-import RadioGroup from '@cloudscape-design/components/radio-group';
-import Button from '@cloudscape-design/components/button';
-import SpaceBetween from '@cloudscape-design/components/space-between';
-import Alert from '@cloudscape-design/components/alert';
-import StatusIndicator from '@cloudscape-design/components/status-indicator';
-import Box from '@cloudscape-design/components/box';
-import { api } from './client';
-import { UserPreferences } from './contracts';
+import {useEffect,useState} from 'react';
+import {Alert,Box,Button,Container,Form,FormField,Header,Input,RadioGroup,Select,SpaceBetween,StatusIndicator} from '@cloudscape-design/components';
+import {api} from './client';
+import type {UserPreferences} from './contracts';
+import {settingsInputAttributes} from './inputSemantics';
 
-interface PreferencesProps {
-  token: string;
-}
-
-export const Preferences: React.FC<PreferencesProps> = ({ token }) => {
-  const [ruleset, setRuleset] = useState<'auto' | 'international' | 'japan'>('auto');
-  const [format, setFormat] = useState<'auto' | 'standard' | 'expanded'>('auto');
-  const [loading, setLoading] = useState(true);
-  const [saving, setSaving] = useState(false);
-  const [statusMessage, setStatusMessage] = useState<string | null>(null);
-  const [errorMessage, setErrorMessage] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    const load = async () => {
-      try {
-        const data = await api<UserPreferences>('/api/chat/preferences', token);
-        if (active && data) {
-          setRuleset(data.ruleset || 'auto');
-          setFormat(data.format || 'auto');
-        }
-      } catch (err: any) {
-        if (active) {
-          setErrorMessage(err.message || 'Failed to load user preferences.');
-        }
-      } finally {
-        if (active) setLoading(false);
-      }
-    };
-    load();
-    return () => {
-      active = false;
-    };
-  }, [token]);
-
-  const handleSave = async () => {
-    setSaving(true);
-    setStatusMessage(null);
-    setErrorMessage(null);
-    try {
-      await api<UserPreferences>('/api/chat/preferences', token, {
-        method: 'PUT',
-        body: JSON.stringify({ ruleset, format }),
-      });
-      setStatusMessage('Preferences saved successfully.');
-    } catch (err: any) {
-      setErrorMessage(err.message || 'Failed to save preferences.');
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  return (
-    <Container
-      header={
-        <Header
-          variant="h2"
-          description="Configure default ruleset and tournament format for card searches, deck resolution, and budget generation."
-        >
-          Deck &amp; Ruleset Preferences
-        </Header>
-      }
-    >
+const commonCurrencies=['USD','EUR','JPY','COP','GBP','CAD','AUD','CHF','CNY','KRW','BRL','MXN','INR','CLP'];
+const currencyNames:Record<string,string>={USD:'US dollar',EUR:'Euro',JPY:'Japanese yen',COP:'Colombian peso',GBP:'Pound sterling',CAD:'Canadian dollar',AUD:'Australian dollar',CHF:'Swiss franc',CNY:'Chinese yuan',KRW:'South Korean won',BRL:'Brazilian real',MXN:'Mexican peso',INR:'Indian rupee',CLP:'Chilean peso'};
+export function Preferences({token}:{token:string}) {
+  const [ruleset,setRuleset]=useState<UserPreferences['ruleset']>('auto');
+  const [format,setFormat]=useState<UserPreferences['format']>('auto');
+  const [location,setLocation]=useState(''),[currency,setCurrency]=useState<string|null>(null);
+  const [currencies,setCurrencies]=useState(commonCurrencies),[currencyWarning,setCurrencyWarning]=useState('');
+  const [loading,setLoading]=useState(true),[loaded,setLoaded]=useState(false),[saving,setSaving]=useState(false);
+  const [error,setError]=useState(''),[success,setSuccess]=useState(''),[retry,setRetry]=useState(0);
+  useEffect(()=>{
+    let active=true;
+    setLoading(true);
+    void api<UserPreferences>('/api/chat/preferences',token).then(value=>{
+      if(active){setRuleset(value.ruleset);setFormat(value.format);setLocation(value.location||'');setCurrency(value.target_currency||null);setLoaded(true);setError('');}
+    }).catch(error=>{if(active)setError(error.message||'Preferences could not be loaded.');}).finally(()=>{if(active)setLoading(false);});
+    void api<string[]>('/api/chat/currencies',token).then(value=>{
+      if(!Array.isArray(value)||!value.every(code=>typeof code==='string'&&/^[A-Z]{3}$/.test(code)))throw new Error('Unavailable currency list');
+      if(active){setCurrencies(value);setCurrencyWarning('');}
+    }).catch(()=>{if(active)setCurrencyWarning('The full currency list is unavailable. Common currencies and your saved choice remain available.');});
+    return ()=>{active=false;};
+    // Session renewal must not overwrite an unsaved preference draft.
+  },[retry]);
+  const options=[{value:'original',label:'Original supplier currencies'},...[...new Set([...currencies,...(currency?[currency]:[])])].sort().map(code=>({value:code,label:currencyNames[code]?`${code} — ${currencyNames[code]}`:code}))];
+  async function save(){
+    setSaving(true);setError('');setSuccess('');
+    try{
+      await api<UserPreferences>('/api/chat/preferences',token,{method:'PUT',body:JSON.stringify({ruleset,format,location:location.trim(),target_currency:currency})});
+      setSuccess('Preferences saved. New requests will use these settings.');
+    }catch(error){setError((error as Error).message);}finally{setSaving(false);}
+  }
+  return <SpaceBetween size="l">
+    <Header variant="h1" description="Set defaults for new requests. Running requests keep the preferences they started with.">Agent preferences</Header>
+    {success&&<Alert type="success" dismissible onDismiss={()=>setSuccess('')}>{success}</Alert>}
+    {error&&<Alert type="error" header="Preferences unavailable" action={!loaded?<Button onClick={()=>setRetry(value=>value+1)}>Retry</Button>:undefined}>{error}</Alert>}
+    {loading?<StatusIndicator type="loading">Loading preferences</StatusIndicator>:<Form actions={<Button variant="primary" loading={saving} disabled={!loaded} onClick={()=>void save()}>Save preferences</Button>}>
       <SpaceBetween size="l">
-        {statusMessage && (
-          <Alert type="success" dismissible onDismiss={() => setStatusMessage(null)}>
-            {statusMessage}
-          </Alert>
-        )}
-        {errorMessage && (
-          <Alert type="error" dismissible onDismiss={() => setErrorMessage(null)}>
-            {errorMessage}
-          </Alert>
-        )}
-
-        {loading ? (
-          <Box padding="l" textAlign="center">
-            <StatusIndicator type="loading">Loading preferences...</StatusIndicator>
-          </Box>
-        ) : (
-          <>
-            <FormField
-              label="Target Ruleset"
-              description="Choose which regional rules, card pools, and banned card lists to apply."
-            >
-              <RadioGroup
-                value={ruleset}
-                onChange={({ detail }) => setRuleset(detail.value as any)}
-                items={[
-                  {
-                    value: 'auto',
-                    label: 'Auto (Autonomous with Clarification)',
-                    description:
-                      'The agent resolves cards autonomously when there is no conflict; if a card is banned or exclusive to one region, it prompts you with selectable options.',
-                  },
-                  {
-                    value: 'international',
-                    label: 'International (Play! Pokémon)',
-                    description:
-                      'Enforces International Standard (regulation marks H, I, J) or Expanded (BW through present) and Play! Pokémon banned card list.',
-                  },
-                  {
-                    value: 'japan',
-                    label: 'Japan (Official Pokémon Card)',
-                    description:
-                      'Enforces Japan Standard (regulation marks H, I, J) or Extra (BW through present) and official Pokémon Card Japan regulation ban list.',
-                  },
-                ]}
-              />
+        <Container header={<Header variant="h2" description="Choose the rules to research, or let the agent resolve them and ask when the choice changes the deck.">Deck rules</Header>}>
+          <SpaceBetween size="l">
+            <FormField label="Ruleset"><RadioGroup value={ruleset} onChange={({detail})=>setRuleset(detail.value as UserPreferences['ruleset'])} items={[
+              {value:'auto',label:'Auto',description:'Resolve from the request. Ask when the rulesets would produce different results.'},
+              {value:'international',label:'International (Play! Pokémon)'},
+              {value:'japan',label:'Japan (Pokémon Card Game)'},
+            ]}/></FormField>
+            <FormField label="Format"><RadioGroup value={format} onChange={({detail})=>setFormat(detail.value as UserPreferences['format'])} items={[
+              {value:'auto',label:'Auto',description:'Use the requested cards and deck context to resolve the format.'},
+              {value:'standard',label:'Standard',description:'Current rotation and applicable card rules.'},
+              {value:'expanded',label:'Expanded / Extra',description:'Expanded card pool and applicable banned-card rules.'},
+            ]}/></FormField>
+          </SpaceBetween>
+        </Container>
+        <Container header={<Header variant="h2" description="Guide price research and choose how buying costs are displayed.">Buying preferences</Header>}>
+          <SpaceBetween size="l">
+            <FormField label="Shopping location" description="Optional city, region, or country. This guides market research and does not exclude other suppliers or guarantee delivery.">
+              <Input value={location} type="search" onChange={({detail})=>setLocation(detail.value)} placeholder="For example, Tokyo, Japan or Medellín, Colombia" name="shopping-location" autoComplete="off" nativeInputAttributes={{...settingsInputAttributes,maxLength:160}}/>
             </FormField>
-
-            <FormField
-              label="Default Format"
-              description="Choose tournament format or let the agent infer it from deck archetype."
-            >
-              <RadioGroup
-                value={format}
-                onChange={({ detail }) => setFormat(detail.value as any)}
-                items={[
-                  {
-                    value: 'auto',
-                    label: 'Auto (Infer from Deck/Cards)',
-                    description:
-                      'Automatically chooses Standard if all cards have modern regulation marks, or Expanded if classic cards are included.',
-                  },
-                  {
-                    value: 'standard',
-                    label: 'Standard',
-                    description: 'Modern tournament rotation (Regulation marks H, I, J).',
-                  },
-                  {
-                    value: 'expanded',
-                    label: 'Expanded / Extra',
-                    description:
-                      'Black & White series to present, respecting active format ban lists.',
-                  },
-                ]}
-              />
+            <FormField label="Target currency" description="Converted estimates appear first. Original supplier prices and the exchange rate remain available. Fees and unknown shipping are excluded.">
+              <Select selectedOption={options.find(option=>option.value===(currency||'original'))!} options={options} filteringType="auto" filteringPlaceholder="Find a currency" filteringAriaLabel="Find a currency" onChange={({detail})=>setCurrency(detail.selectedOption.value==='original'?null:detail.selectedOption.value||null)}/>
             </FormField>
-
-            <Box float="right">
-              <Button variant="primary" loading={saving} onClick={handleSave}>
-                Save preferences
-              </Button>
-            </Box>
-          </>
-        )}
+            {currencyWarning&&<Box color="text-status-warning">{currencyWarning}</Box>}
+          </SpaceBetween>
+        </Container>
       </SpaceBetween>
-    </Container>
-  );
-};
+    </Form>}
+  </SpaceBetween>;
+}

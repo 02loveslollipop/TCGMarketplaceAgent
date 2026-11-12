@@ -6,6 +6,8 @@ export type ChatEntry=ChatEvent&{id:string;at?:string};
 export function decisionText(decision:Decision,question?:Question|null){
   const scope=question?.missing?.map(card=>`${card.quantity} × ${card.name}${card.number?` #${card.number}`:''}${[card.set_name,card.language,card.condition,card.printing].filter(Boolean).length?` (${[card.set_name,card.language,card.condition,card.printing].filter(Boolean).join(' · ')})`:''}`).join(', ');
   switch(decision.action){
+    case 'approve_deck':return 'Approved this deck. Continue to supplier prices and the buying budget.';
+    case 'revise_deck':return `Requested deck changes before pricing: ${decision.text}`;
     case 'clarify':return decision.text||'Provided clarification';
     case 'substitute':return `Approved substitute research${scope?` for ${scope}`:''}: ${decision.text}`;
     case 'keep_missing':return `Approved keeping the listed cards missing${scope?`: ${scope}`:''}.`;

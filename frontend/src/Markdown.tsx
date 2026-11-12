@@ -1,6 +1,7 @@
 import React from 'react';
 import Box from '@cloudscape-design/components/box';
 import Link from '@cloudscape-design/components/link';
+import Table from '@cloudscape-design/components/table';
 
 interface MarkdownProps {
   content?: string;
@@ -128,30 +129,13 @@ export const Markdown: React.FC<MarkdownProps> = ({ content, text }) => {
         rows.push(splitTableCells(nextLine));
       }
       blocks.push(
-        <div key={`table-${i}`} className="chat-markdown-table-wrap">
-          <table className="chat-markdown-table">
-            <thead>
-              <tr>
-                {headers.map((h, cIdx) => (
-                  <th key={cIdx} style={{ textAlign: alignments[cIdx] || 'left' }}>
-                    {renderInline(h)}
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {rows.map((row, rIdx) => (
-                <tr key={rIdx}>
-                  {headers.map((_, cIdx) => (
-                    <td key={cIdx} style={{ textAlign: alignments[cIdx] || 'left' }}>
-                      {renderInline(row[cIdx] ?? '')}
-                    </td>
-                  ))}
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <Table<string[]> key={`table-${i}`} variant="embedded" wrapLines
+          ariaLabels={{tableLabel:'Response table'}}
+          items={rows}
+          columnDefinitions={headers.map((header,index)=>({
+            id:`column-${index}`,header:<Box textAlign={(alignments[index]||'left') as 'left'|'center'|'right'}>{renderInline(header)}</Box>,
+            cell:row=><Box textAlign={(alignments[index]||'left') as 'left'|'center'|'right'}>{renderInline(row[index]??'')}</Box>,
+          }))}/>
       );
       continue;
     }
