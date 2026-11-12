@@ -4,6 +4,7 @@ Retrieval is read-only and goes through Apify. No login, paywall, CAPTCHA or
 other technical block is bypassed.
 """
 import os
+from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from urllib.parse import quote, urlparse
@@ -19,7 +20,28 @@ CARDMARKET_ACTOR = "phantom_coder~cardmarket-listings-scraper"
 
 
 class SupplierError(Exception):
-    pass
+    def __init__(self, message, *, outcome="unavailable", layer="apify", http_status=None):
+        super().__init__(message)
+        self.outcome, self.layer, self.http_status = outcome, layer, http_status
+
+
+def http_outcome(status):
+    return {401: "unauthorized", 402: "billing_required", 403: "blocked", 404: "not_found", 429: "rate_limited"}.get(status, "http_error")
+
+
+@dataclass
+class SupplierQuery:
+    offers: list[Offer] = field(default_factory=list)
+    outcome: str = "empty"
+    layer: str = "tcgdex"
+    message: str = "No price data returned; availability is unverified."
+    http_status: int | None = None
+
+    def diagnostic(self, supplier, card, phase):
+        return {"supplier": supplier, "card_id": card.card_id, "phase": phase,
+                "layer": self.layer, "outcome": self.outcome, "message": self.message,
+                "http_status": self.http_status, "retrieved_at": utcnow().isoformat()}
+
 
 
 def tcgplayer_input(card: CardRequest) -> dict:
@@ -128,13 +150,22 @@ class Suppliers:
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    self._tcgdex_cache[key] = data
-                    return data
-        except Exception:
-            pass
-        return None
+                if resp.status_code == 404:
+                    return None
+                resp.raise_for_status()
+                data = resp.json()
+                if not isinstance(data, dict):
+                    raise SupplierError("TCGdex returned an invalid card response.", layer="tcgdex", outcome="invalid_response")
+                self._tcgdex_cache[key] = data
+                return data
+        except httpx.HTTPStatusError as error:
+            raise SupplierError("TCGdex request failed.", layer="tcgdex", outcome=http_outcome(error.response.status_code), http_status=error.response.status_code) from error
+        except httpx.TimeoutException as error:
+            raise SupplierError("TCGdex request timed out.", layer="tcgdex", outcome="timeout") from error
+        except httpx.RequestError as error:
+            raise SupplierError("TCGdex connection failed.", layer="tcgdex", outcome="network_error") from error
+        except ValueError as error:
+            raise SupplierError("TCGdex returned invalid JSON.", layer="tcgdex", outcome="invalid_response") from error
 
     async def _fetch_tcgdex_by_name(self, name: str, lang: str = "en") -> list[dict]:
         key = f"name:{lang}:{name.strip().casefold()}"
@@ -144,14 +175,22 @@ class Suppliers:
         try:
             async with httpx.AsyncClient(timeout=15) as client:
                 resp = await client.get(url)
-                if resp.status_code == 200:
-                    data = resp.json()
-                    if isinstance(data, list):
-                        self._tcgdex_cache[key] = data
-                        return data
-        except Exception:
-            pass
-        return []
+                if resp.status_code == 404:
+                    return []
+                resp.raise_for_status()
+                data = resp.json()
+                if not isinstance(data, list):
+                    raise ValueError("Invalid catalog search")
+                self._tcgdex_cache[key] = data
+                return data
+        except httpx.HTTPStatusError as error:
+            raise SupplierError("TCGdex search failed.", layer="tcgdex", outcome=http_outcome(error.response.status_code), http_status=error.response.status_code) from error
+        except httpx.TimeoutException as error:
+            raise SupplierError("TCGdex search timed out.", layer="tcgdex", outcome="timeout") from error
+        except httpx.RequestError as error:
+            raise SupplierError("TCGdex search connection failed.", layer="tcgdex", outcome="network_error") from error
+        except ValueError as error:
+            raise SupplierError("TCGdex returned an invalid search response.", layer="tcgdex", outcome="invalid_response") from error
 
     def _offers_from_tcgdex_pricing(
         self,
@@ -233,7 +272,8 @@ class Suppliers:
                 product_url = f"https://www.cardmarket.com/en/Pokemon/Products/Singles?idProduct={id_product}" if id_product else str(card.cardmarket_url or f"https://api.tcgdex.net/v2/en/cards/{card_id}")
                 source = Source(url=product_url, title=f"{card.name} ({card.set_name} #{card.number}) — Cardmarket via TCGdex", retrieved_at=retrieved_at)
 
-                normal_low = cm.get("low") or cm.get("trend") or cm.get("avg")
+                normal_trend = cm.get("trend") or cm.get("avg")
+                normal_low = cm.get("low") or normal_trend
                 if normal_low is not None and normal_low > 0:
                     offers.append(Offer(
                         id=f"cardmarket:{card_id}:normal",
@@ -243,7 +283,7 @@ class Suppliers:
                         number=card.number,
                         condition=None,
                         language=None,
-                        printing="Normal",
+                        printing=None,
                         price=decimal(normal_low),
                         currency=currency,
                         quantity=None,
@@ -256,7 +296,11 @@ class Suppliers:
                         identity_source=id_source,
                     ))
 
-                holo_low = cm.get("low-holo") or cm.get("trend-holo") or cm.get("avg-holo")
+                if normal_trend is not None and normal_trend > 0 and offers:
+                    offers.append(offers[-1].model_copy(update={"id": f"cardmarket:{card_id}:normal:market", "price": decimal(normal_trend)}))
+
+                holo_trend = cm.get("trend-holo") or cm.get("avg-holo")
+                holo_low = cm.get("low-holo") or holo_trend
                 if holo_low is not None and holo_low > 0:
                     offers.append(Offer(
                         id=f"cardmarket:{card_id}:holo",
@@ -278,6 +322,9 @@ class Suppliers:
                         source=source,
                         identity_source=id_source,
                     ))
+
+                if holo_trend is not None and holo_trend > 0 and offers:
+                    offers.append(offers[-1].model_copy(update={"id": f"cardmarket:{card_id}:holo:market", "price": decimal(holo_trend)}))
 
         return offers
 
@@ -344,53 +391,64 @@ class Suppliers:
 
         return offers
 
+    async def baseline(self, supplier: str, card: CardRequest) -> SupplierQuery:
+        """Price guides only: never infer inventory or a purchasable listing."""
+        try:
+            offers = await self._quote_from_tcgdex(card, supplier)
+            return SupplierQuery(offers, "success" if offers else "empty", "tcgdex",
+                                 "Retrieved baseline prices; stock is unverified." if offers else "No baseline price returned; this does not mean out of stock.")
+        except SupplierError as error:
+            return SupplierQuery(outcome=error.outcome, layer=error.layer, message=str(error), http_status=error.http_status)
+        except (ValueError, TypeError, KeyError, InvalidOperation):
+            return SupplierQuery(outcome="invalid_response", message="Baseline source returned incomplete price data.")
+
+    async def listings(self, supplier: str, card: CardRequest) -> SupplierQuery:
+        """Separate live listing check. Empty/blocked/disabled are not stock evidence."""
+        enabled = self.client or os.getenv("APIFY_LIVE_SCRAPE", "false").lower() in {"1", "true", "yes"}
+        if not enabled:
+            return SupplierQuery(outcome="disabled", layer="apify", message="Live listing retrieval is disabled by configuration; availability is unverified.")
+        if not self.api_key:
+            return SupplierQuery(outcome="unauthorized", layer="apify", message="Apify runtime credential is unavailable; availability is unverified.")
+        try:
+            payload = tcgplayer_listings_input(card) if supplier == "TCGplayer" else cardmarket_input(card)
+            actor = TCGPLAYER_LISTINGS_ACTOR if supplier == "TCGplayer" else CARDMARKET_ACTOR
+            args = dict(json=payload, headers={"Authorization": f"Bearer {self.api_key}"}, params={"timeout":90, "memory":256})
+            if self.client:
+                response = await self.client.post(f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items", **args)
+            else:
+                async with httpx.AsyncClient(timeout=100) as client:
+                    response = await client.post(f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items", **args)
+            response.raise_for_status()
+            data = response.json()
+            if not isinstance(data, list):
+                raise ValueError("Invalid dataset shape")
+            offers = tcgplayer_listings_offers(data) if supplier == "TCGplayer" else cardmarket_offers(data, card)
+            return SupplierQuery(offers, "success" if offers else "empty", "apify",
+                                 "Retrieved seller listings; compare exact variants and quantities." if offers else "The listing search returned no rows; stock is unverified.")
+        except httpx.HTTPStatusError as error:
+            code = error.response.status_code
+            return SupplierQuery(outcome=http_outcome(code), layer="apify", http_status=code,
+                                 message=f"Apify retrieval failed (HTTP {code}); availability is unverified.")
+        except httpx.TimeoutException:
+            return SupplierQuery(outcome="timeout", layer="apify", message="Apify retrieval timed out; availability is unverified.")
+        except httpx.RequestError:
+            return SupplierQuery(outcome="network_error", layer="apify", message="Apify connection failed; availability is unverified.")
+        except SupplierError as error:
+            return SupplierQuery(outcome="input_missing", layer="apify", message=str(error))
+        except (ValidationError, ValueError, KeyError, TypeError, InvalidOperation):
+            return SupplierQuery(outcome="invalid_response", layer="apify", message="Apify returned incomplete listing data; availability is unverified.")
+
     async def quote(self, supplier: str, card: CardRequest) -> list[Offer]:
-        apify_live = os.getenv("APIFY_LIVE_SCRAPE", "false").lower() in {"1", "true", "yes"}
-        use_apify = bool(self.client or (self.api_key and apify_live))
-
-        offers: list[Offer] = []
-        apify_error = None
-
-        if use_apify:
-            if not self.api_key:
-                raise SupplierError("Apify runtime credential is unavailable.")
-            try:
-                payload = tcgplayer_listings_input(card) if supplier == "TCGplayer" else cardmarket_input(card)
-                actor = TCGPLAYER_LISTINGS_ACTOR if supplier == "TCGplayer" else CARDMARKET_ACTOR
-                if self.client:
-                    response = await self.client.post(f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items", json=payload,
-                                                       headers={"Authorization":f"Bearer {self.api_key}"}, params={"timeout":90, "memory":256})
-                else:
-                    async with httpx.AsyncClient(timeout=100) as client:
-                        response = await client.post(f"https://api.apify.com/v2/acts/{actor}/run-sync-get-dataset-items", json=payload,
-                                                     headers={"Authorization":f"Bearer {self.api_key}"}, params={"timeout":90, "memory":256})
-                response.raise_for_status()
-                data = response.json()
-                if not isinstance(data, list):
-                    raise SupplierError("Actor returned an unexpected dataset shape.")
-                apify_offers = tcgplayer_listings_offers(data) if supplier == "TCGplayer" else cardmarket_offers(data, card)
-                offers.extend(apify_offers)
-            except httpx.HTTPStatusError as error:
-                apify_error = SupplierError(f"Apify retrieval failed (HTTP {error.response.status_code}); no verified quotation was returned.")
-            except (httpx.RequestError, ValidationError, KeyError, TypeError, InvalidOperation):
-                apify_error = SupplierError("Apify retrieval failed or returned incomplete data; no verified quotation was returned.")
-            except SupplierError as err:
-                apify_error = err
-
-        if not offers:
-            try:
-                tcgdex_offers = await self._quote_from_tcgdex(card, supplier)
-                if tcgdex_offers:
-                    offers.extend(tcgdex_offers)
-                    apify_error = None
-            except Exception:
-                pass
-
-        if not offers:
-            if apify_error:
-                raise apify_error
-            if not self.api_key and not offers:
-                raise SupplierError("Apify runtime credential is unavailable.")
-            raise SupplierError(f"No verified {supplier} offers found for {card.name}.")
-
-        return offers
+        """Compatibility adapter for older callers. The graph uses the two phases."""
+        live = await self.listings(supplier, card)
+        if live.offers:
+            return live.offers
+        baseline = await self.baseline(supplier, card)
+        if baseline.offers:
+            return baseline.offers
+        if live.outcome != "disabled":
+            raise SupplierError(live.message, outcome=live.outcome, layer=live.layer, http_status=live.http_status)
+        if not self.api_key:
+            raise SupplierError("Apify runtime credential is unavailable.")
+        raise SupplierError(f"No verified {supplier} offers found for {card.name}." if baseline.outcome == "empty" else baseline.message,
+                            outcome=baseline.outcome, layer=baseline.layer, http_status=baseline.http_status)

@@ -31,9 +31,9 @@ class FakeSuppliers:
         self.stock = stock
 
     async def quote(self, supplier, card):
-        if not self.stock or supplier == "Cardmarket":
+        if supplier == "Cardmarket":
             return []
-        return [Offer(id="listing", name=card.name, supplier="TCGplayer", set_name=card.set_name, number=card.number, condition=card.condition, language=card.language, printing=card.printing, quantity=1, availability="in_stock", price="1.25", currency="USD", price_kind="listing", source=Source(url="https://example.com/listing",title="Synthetic listing"))]
+        return [Offer(id="listing", name=card.name, supplier="TCGplayer", set_name=card.set_name, number=card.number, condition=card.condition, language=card.language, printing=card.printing, quantity=1 if self.stock else 0, availability="in_stock" if self.stock else "out_of_stock", price="1.25", currency="USD", price_kind="listing", source=Source(url="https://example.com/listing",title="Synthetic listing"))]
 
 
 def execution(repo):
@@ -76,7 +76,7 @@ async def test_missing_cards_require_scoped_explicit_consent(repo):
     assert repo.claim_execution(row.id,"owner")
     events = await collect(DeckAgent(repo, FakePlanner(), FakeSuppliers(False)), row, decision=Decision(action="keep_missing",approved=True))
     result = next(event["data"] for event in events if event["type"]=="result")
-    assert result["consent"]["approved"] and result["consent"]["missing"] == result["missing"]
+    assert result["consent"]["approved"] and result["consent"]["missing"] == result["stock_shortages"]
 
 
 async def test_same_card_id_uncovered_variant_requires_specific_consent(repo):
@@ -89,6 +89,8 @@ async def test_same_card_id_uncovered_variant_requires_specific_consent(repo):
         async def quote(self, supplier, card):
             if supplier != "TCGplayer":
                 return []
+            if card.condition == "LP":
+                return [Offer(id="lp-out", name=card.name, supplier=supplier, set_name=card.set_name, number=card.number, condition="LP", language=card.language, printing=card.printing, quantity=0, availability="out_of_stock", price="1.25", currency="USD", price_kind="listing", source=Source(url="https://example.com/lp",title="Synthetic out-of-stock listing"))]
             return [Offer(id="listing", name=card.name, supplier=supplier, set_name=card.set_name, number=card.number, condition="NM", language=card.language, printing=card.printing, quantity=1, availability="in_stock", price="1.25", currency="USD", price_kind="listing", source=Source(url="https://example.com/listing",title="Synthetic listing"))]
 
     row = execution(repo)
@@ -102,7 +104,7 @@ async def test_same_card_id_uncovered_variant_requires_specific_consent(repo):
     assert repo.claim_execution(row.id,"owner")
     events = await collect(agent, row, decision=Decision(action="keep_missing", approved=True))
     result = next(event["data"] for event in events if event["type"] == "result")
-    assert result["consent"]["missing"] == question["missing"] == result["missing"]
+    assert result["consent"]["missing"] == question["missing"] == result["stock_shortages"]
 
 
 async def test_unapproved_missing_is_rejected_and_owner_enforced(repo):

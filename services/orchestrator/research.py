@@ -69,6 +69,25 @@ def _iter_exceptions(exc: BaseException, seen: set[int] | None = None):
         yield from _iter_exceptions(exc.__context__, seen)
 
 
+class ResearchError(ValueError):
+    def __init__(self, message, *, layer="mcp", outcome="unavailable", http_status=None):
+        super().__init__(message)
+        self.layer, self.outcome, self.http_status = layer, outcome, http_status
+
+
+def source_error(text, layer="webpage"):
+    """Classify bounded failure metadata without echoing untrusted response text."""
+    lowered = text.casefold()
+    status = re.search(r"(?:http\s*|status(?: code)?[: =]*)(401|402|403|404|429|5\d\d)\b", lowered)
+    code = int(status.group(1)) if status else None
+    outcome = {401:"unauthorized", 402:"billing_required", 403:"blocked", 404:"not_found", 429:"rate_limited"}.get(code, "http_error" if code else "unavailable")
+    if any(marker in lowered for marker in ("captcha", "verify you are human", "just a moment", "checking your browser", "access denied")):
+        outcome = "blocked"
+    elif "timeout" in lowered or "timed out" in lowered:
+        outcome = "timeout"
+    return ResearchError(f"{layer.upper()} retrieval could not complete; no stock conclusion can be drawn.", layer=layer, outcome=outcome, http_status=code)
+
+
 class Research:
     def __init__(
         self,
@@ -103,35 +122,40 @@ class Research:
                     async with Client(transport) as client:
                         res = await client.call_tool(tool_name, arguments)
                         if getattr(res, "is_error", False) or getattr(res, "isError", False):
-                            raise RuntimeError("\n".join(getattr(c, "text", "") for c in res.content))
+                            raise source_error("\n".join(getattr(c, "text", "") for c in res.content), "webpage" if tool_name == "fetch_content" else "mcp")
                         return "\n".join(getattr(c, "text", "") for c in res.content if getattr(c, "text", None))
-            except BaseException as exc:
+            except Exception as exc:
                 for item in _iter_exceptions(exc):
                     if isinstance(item, httpx.HTTPStatusError):
-                        raise RuntimeError(f"ddg_mcp request failed with HTTP {item.response.status_code}") from exc
+                        raise source_error(f"HTTP {item.response.status_code}", "mcp") from exc
+                for item in _iter_exceptions(exc):
+                    if isinstance(item, ResearchError):
+                        raise item
                 for item in _iter_exceptions(exc):
                     if isinstance(item, RuntimeError) and not any(
                         isinstance(sub, (httpx.ConnectError, httpx.ConnectTimeout))
                         for sub in _iter_exceptions(item)
                     ):
-                        raise item
+                        raise source_error(str(item), "mcp") from exc
                 is_local_connect_error = any(
                     isinstance(item, (httpx.ConnectError, httpx.ConnectTimeout))
                     for item in _iter_exceptions(exc)
                 )
                 if not is_local_connect_error or os.getenv("DYNO"):
-                    raise RuntimeError(f"ddg_mcp request failed: {exc}") from exc
+                    raise ResearchError("MCP connection failed; source availability is unverified.", outcome="timeout" if any(isinstance(item, httpx.TimeoutException) for item in _iter_exceptions(exc)) else "network_error") from exc
                 # On local transport/connection errors in dev/test mode when ddg-mcp container is not running, fall through to in-process MCP server
 
         async with Client(ddg_main.ddg_server.mcp) as client:
             res = await client.call_tool(tool_name, arguments)
             if getattr(res, "is_error", False) or getattr(res, "isError", False):
-                raise RuntimeError("\n".join(getattr(c, "text", "") for c in res.content))
+                raise source_error("\n".join(getattr(c, "text", "") for c in res.content), "webpage" if tool_name == "fetch_content" else "mcp")
             return "\n".join(getattr(c, "text", "") for c in res.content if getattr(c, "text", None))
 
     async def search(self, query: str) -> list[dict]:
         self.network_budget()
         raw = await self._call_ddg_mcp_tool("search", {"query": query[:500], "max_results": 8})
+        if raw.lstrip().startswith("Error:"):
+            raise source_error(raw, "mcp")
         results = []
         matches = re.finditer(
             r"^\d+\.\s+(.+?)\n\s*URL:\s*(\S+)[^\n]*\n\s*Summary:\s*(.*?)(?=\n\s*\n|\n\d+\.\s|\Z)",
@@ -157,11 +181,16 @@ class Research:
 
     async def fetch(self, url: str) -> dict:
         self.network_budget()
-        await asyncio.to_thread(public_https, url)
+        try:
+            await asyncio.to_thread(public_https, url)
+        except OSError as error:
+            raise ResearchError("Webpage address resolution failed.", layer="webpage", outcome="network_error") from error
+        except ValueError as error:
+            raise ResearchError("Webpage URL was rejected by the public HTTPS policy.", layer="webpage", outcome="url_rejected") from error
         text = await self._call_ddg_mcp_tool("fetch_content", {"url": url, "max_length": 20000, "backend": "auto", "parse_mode": "markdown"})
         text = re.sub(r"\n\n---\n\[Content info:.*?\]$", "", text, flags=re.DOTALL).strip()
         if text.startswith("Error:") or any(marker in text.casefold() for marker in ("verify you are human", "just a moment...", "checking your browser")):
-            raise ValueError(text)
+            raise source_error(text)
         first_line = text.split("\n", 1)[0].strip() if text else url
         source = Source(url=url, title=first_line[:200] or url, excerpt=text[:20000])
         self.sources[str(source.url)] = source

@@ -116,7 +116,9 @@ def test_provider_summaries_flow_through_graph_sse_history_and_usage(repo):
     conversation=client.get('/conversations',headers=headers()).json()[0]
     history=client.get('/conversations/'+conversation['id'],headers=headers()).json()
     summaries=[row['content']['data'] for row in history if row['content'].get('type')=='thinking']
-    assert len(summaries)==1 and summaries[0]['status']=='complete'
+    assert len([item for item in summaries if item['source']=='provider_summary'])==1
+    assert all(item['status']=='complete' for item in summaries)
+    assert any(item['source']=='approach_summary' for item in summaries)
     assert client.get('/usage',headers=headers()).json()['total_tokens']==12
 
 

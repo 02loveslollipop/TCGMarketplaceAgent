@@ -23,7 +23,7 @@ def tool_start(name, arguments):
     return trace,public
 
 
-def tool_end(trace, name, public, status, sources=()):
+def tool_end(trace, name, public, status, sources=(), diagnostic=None):
     links=[]
     for source in sources:
         row=source.model_dump(mode="json") if hasattr(source,"model_dump") else source
@@ -32,7 +32,10 @@ def tool_end(trace, name, public, status, sources=()):
         if parsed.scheme != "https" or parsed.username or any(key in parsed.query.lower() for key in ("token=","key=","signature=","auth=")):continue
         if url not in [item["url"] for item in links]:links.append({"url":url,"title":str(row.get("title",parsed.hostname))[:160]})
         if len(links)==8:break
-    event_writer()({"type":"tool","data":{"id":trace[0],"name":name,"status":status,"input":public,"sources":links,"duration_ms":round((time.monotonic()-trace[1])*1000)}})
+    data = {"id":trace[0],"name":name,"status":status,"input":public,"sources":links,"duration_ms":round((time.monotonic()-trace[1])*1000)}
+    if diagnostic:
+        data["diagnostic"] = {key: diagnostic[key] for key in ("layer", "phase", "outcome", "http_status", "message") if key in diagnostic}
+    event_writer()({"type":"tool", "data":data})
 
 
 def summaries(message):

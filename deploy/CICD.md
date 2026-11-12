@@ -60,6 +60,8 @@ app-only provisioner; CI does not use database administrator credentials.
 | Orchestrator | `AUTH_URL=https://api.auth.tcg-marketplace.02labs.me`, `DDG_MCP_URL=https://<ddg_mcp-app>.herokuapp.com/mcp`, `MCP_AUTH_TOKEN` (same value as the ddg_mcp app), `OPENAI_API_KEY`, `MISTRAL_API_KEY`, `APIFY_API_KEY` as available |
 | DDG MCP | `SERVICE_NAME=ddg_mcp`, `MCP_AUTH_TOKEN`; optional `DDG_SEARCH_BACKEND` (default `auto`), `DDG_FETCH_BACKEND` (default `auto`), `DDG_SAFE_SEARCH` (e.g. `MODERATE`), `DDG_REF_URL_THRESHOLD` (default `0`). No `DATABASE_DSN`. |
 
+`APIFY_LIVE_SCRAPE` explicitly controls live seller-listing retrieval (default `false`). An API key alone does not enable it. The current testing deployment keeps it disabled: baseline price-guide estimates are available, but seller stock is unverified. Every execution records this disabled outcome separately from blocked access, empty datasets, transport errors and confirmed listing shortfalls. Set it to `true` only when live Apify actor runs are intended; those runs may incur provider usage charges.
+
 The Heroku buildpack uses `requirements.txt`, `.python-version`, and `Procfile`.
 The deploy workflow sends a minimal, history-free source snapshot to each Heroku
 app, keeping the app deployment independent of the repository history.

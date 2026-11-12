@@ -432,8 +432,10 @@ Tournament deck lists and deck data for Pokémon TCG.
         assert "https://limitlesstcg.com/decks" in research.sources
 
     with patch.object(research, "_call_ddg_mcp_tool", return_value="Just a moment... Please verify you are human"):
-        with pytest.raises(ValueError, match="verify you are human"):
+        from services.orchestrator.research import ResearchError
+        with pytest.raises(ResearchError) as failure:
             await research.fetch("https://limitlesstcg.com/blocked")
+        assert failure.value.layer == "webpage" and failure.value.outcome == "blocked"
 
 
 @pytest.mark.asyncio
@@ -672,8 +674,11 @@ async def test_ddg_mcp_http_401_raises_runtime_error_without_fallback():
     status_err = httpx.HTTPStatusError("401 Unauthorized", request=req, response=resp)
 
     with patch("mcp.client.streamable_http.streamable_http_client", side_effect=ExceptionGroup("mcp group", [status_err])):
-        with pytest.raises(RuntimeError, match="ddg_mcp request failed with HTTP 401"):
+        from services.orchestrator.research import ResearchError
+        with pytest.raises(ResearchError) as failure:
             await research._call_ddg_mcp_tool("search", {"query": "test"})
+        assert failure.value.layer == "mcp" and failure.value.outcome == "unauthorized"
+        assert failure.value.http_status == 401
 
 
 @pytest.mark.asyncio

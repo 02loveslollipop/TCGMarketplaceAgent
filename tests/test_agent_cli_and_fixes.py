@@ -127,7 +127,7 @@ async def test_suppliers_quote_from_tcgdex():
     assert len(cm_offers) >= 2
     assert all(o.supplier == "Cardmarket" for o in cm_offers)
     assert all(o.currency == "EUR" for o in cm_offers)
-    assert any(o.printing == "Normal" for o in cm_offers)
+    assert any(o.printing is None for o in cm_offers)
     assert any(o.printing == "Holofoil" for o in cm_offers)
     assert all("cardmarket.com" in str(o.source.url) for o in cm_offers)
 

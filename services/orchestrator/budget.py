@@ -74,9 +74,7 @@ def request_details(card: CardRequest) -> dict:
             ("card_id", "name", "set_name", "number", "condition", "language", "printing")}
 
 
-def equivalent(card: CardRequest, offer: Offer) -> bool:
-    if offer.price_kind != "listing" or offer.availability != "in_stock" or not offer.quantity:
-        return False
+def matches_variant(card: CardRequest, offer: Offer) -> bool:
     for field in ("name", "set_name", "number", "language", "printing", "condition"):
         if field == "number":
             requested, found = card_number(getattr(card, field)), card_number(getattr(offer, field))
@@ -94,6 +92,41 @@ def equivalent(card: CardRequest, offer: Offer) -> bool:
         if requested != "any" and requested != found:
             return False
     return True
+
+
+def equivalent(card: CardRequest, offer: Offer) -> bool:
+    return (offer.price_kind == "listing" and offer.availability == "in_stock"
+            and bool(offer.quantity) and matches_variant(card, offer))
+
+
+def availability_evidence(cards: list[CardRequest], offers: list[Offer]) -> dict:
+    """Only actual matching listings provide evidence of stock shortages.
+
+    Empty results, disabled retrieval and price guides never prove a shortage.
+    A shortfall means the retrieved listings cannot cover the quantity, not that
+    the whole market has no stock. Unknown listing quantities remain unknown.
+    """
+    shortages, unverified = [], []
+    unique = {offer.id: offer for offer in offers}
+    requests = merge_requests(cards)
+    known_offers = [offer for offer in unique.values() if offer.price_kind == "listing"
+                    and (offer.availability == "out_of_stock" or (offer.availability == "in_stock" and offer.quantity is not None))]
+    allocated = optimal_allocation(requests, known_offers)
+    for card, amounts in zip(requests, allocated):
+        listings = [offer for offer in unique.values()
+                    if offer.price_kind == "listing" and matches_variant(card, offer)]
+        known = [offer for offer in listings if offer.availability == "out_of_stock"
+                 or (offer.availability == "in_stock" and offer.quantity is not None)]
+        available = sum(amounts)
+        if available >= card.quantity:
+            continue
+        details = {**request_details(card), "quantity": card.quantity - available}
+        if known and len(known) == len(listings):
+            shortages.append({**details, "verified_quantity": available,
+                              "sources": [offer.source.model_dump(mode="json") for offer in known]})
+        else:
+            unverified.append(details)
+    return {"stock_shortages": shortages, "availability_unverified": unverified}
 
 
 def merge_requests(cards: list[CardRequest]) -> list[CardRequest]:

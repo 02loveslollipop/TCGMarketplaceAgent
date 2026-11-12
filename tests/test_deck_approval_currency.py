@@ -187,14 +187,14 @@ async def test_reference_only_deck_finishes_with_an_estimate_without_fake_purcha
     await collect(agent, row, initial={'request': 'Build deck', 'history': []})
     assert repo.claim_execution(row.id, 'owner')
     events = await collect(agent, row, decision=Decision(action='approve_deck', approved=True))
-    assert any(event['type'] == 'question' and event['data']['kind'] == 'missing_cards' for event in events)
-    assert repo.claim_execution(row.id, 'owner')
-    events = await collect(agent, row, decision=Decision(action='keep_missing', approved=True))
+    assert not any(event['type'] == 'question' for event in events)
     result = next(event['data'] for event in events if event['type'] == 'result')
     assert result['reference_estimates'][0]['product_subtotal'] == '75.00'
     assert result['reference_estimates'][0]['price_coverage_complete']
     assert all(not budget['complete'] and budget['confirmed_total'] is None for budget in result['budgets'])
     assert result['missing'][0]['quantity'] == 60
+    assert result['stock_shortages'] == []
+    assert result['availability_unverified'][0]['quantity'] == 60
 
 
 def test_reference_estimates_do_not_borrow_other_printings():

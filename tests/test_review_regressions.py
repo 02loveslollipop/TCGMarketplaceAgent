@@ -50,7 +50,7 @@ def test_price_guides_never_create_stock_or_confirmed_budget():
         assert offers
         assert all(o.price_kind == "reference" and o.quantity is None for o in offers)
         assert all(o.availability == "unknown" and o.condition is None and o.language is None for o in offers)
-        assert all(o.printing == "Normal" for o in offers)
+        assert all(o.printing == ("Normal" if supplier == "TCGplayer" else None) for o in offers)
         result = budgets([request], offers)
         assert result["missing"][0]["quantity"] == 12
         assert not any(b["complete"] or b["confirmed_total"] for b in result["budgets"])

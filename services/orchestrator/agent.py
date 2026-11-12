@@ -6,9 +6,9 @@ from langgraph.graph import StateGraph, START, END
 from langgraph.types import Command, interrupt
 
 from shared.contracts import AgentPlan, Decision, Legality, Offer, Source
-from services.orchestrator.budget import budgets, reference_estimates
+from services.orchestrator.budget import budgets, reference_estimates, availability_evidence
 from services.orchestrator.checkpoints import DatabaseSaver
-from services.orchestrator.suppliers import SupplierError
+from services.orchestrator.suppliers import SupplierError, SupplierQuery
 from services.orchestrator.progress import progress
 from services.orchestrator.trace import tool_start, tool_end, event_writer
 from services.orchestrator.exchange import exchange_rates
@@ -23,6 +23,9 @@ class State(TypedDict, total=False):
     plan: dict
     legality: dict
     offers: list
+    route: str
+    baseline_offers: list
+    retrieval_diagnostics: list
     supplier_errors: list
     budget: dict
     question: dict
@@ -37,18 +40,30 @@ class DeckAgent:
         self.repo, self.planner, self.suppliers = repo, planner, suppliers
         self.exchange = exchange or exchange_rates
         builder = StateGraph(State)
-        for name in ("understand", "clarify", "validate", "review", "quote", "missing", "decide", "finish"):
+        for name in ("router", "deck_builder", "understand", "clarify", "validate", "review", "card_search", "quote", "missing", "decide", "finish"):
             builder.add_node(name, getattr(self, name))
-        builder.add_edge(START, "understand")
+        builder.add_edge(START, "router")
+        builder.add_conditional_edges("router", lambda state: "deck_builder" if state["route"] == "deck" else "understand")
+        builder.add_conditional_edges("deck_builder", lambda state: "clarify" if state["plan"].get("question") else "validate")
         builder.add_conditional_edges("understand", lambda state:"clarify" if state["plan"].get("question") else "validate")
-        builder.add_conditional_edges("clarify", lambda state:END if state.get("cancelled") else "understand")
-        builder.add_conditional_edges("validate", lambda state:"review" if state["plan"].get("is_deck") or sum(card["quantity"] for card in state["plan"]["cards"]) == 60 else "quote")
-        builder.add_conditional_edges("review", lambda state:END if state.get("cancelled") else "understand" if state.get("deck_approval",{}).get("action")=="revise_deck" else "quote")
+        builder.add_conditional_edges("clarify", lambda state:END if state.get("cancelled") else "router")
+        builder.add_conditional_edges("validate", lambda state:"review" if state["plan"].get("is_deck") or sum(card["quantity"] for card in state["plan"]["cards"]) == 60 else "card_search")
+        builder.add_conditional_edges("review", lambda state:END if state.get("cancelled") else "router" if state.get("deck_approval",{}).get("action")=="revise_deck" else "card_search")
+        builder.add_edge("card_search", "quote")
         builder.add_edge("quote", "missing")
-        builder.add_conditional_edges("missing", lambda state:"decide" if state["budget"]["missing"] else "finish")
-        builder.add_conditional_edges("decide", lambda state:END if state.get("cancelled") else "understand" if state.get("consent",{}).get("action")=="substitute" else "finish")
+        builder.add_conditional_edges("missing", lambda state:"decide" if state["budget"].get("stock_shortages", []) else "finish")
+        builder.add_conditional_edges("decide", lambda state:END if state.get("cancelled") else "router" if state.get("consent",{}).get("action")=="substitute" else "finish")
         builder.add_edge("finish", END)
         self.graph = builder.compile(checkpointer=DatabaseSaver(repo))
+
+    async def router(self, state):
+        progress("route", "Determining whether to build a deck or research specified cards.")
+        route = await self.planner.route(state["request"], state.get("history", []), state.get("images", [])) if hasattr(self.planner, "route") else "cards"
+        return {"route": route}
+
+    async def deck_builder(self, state):
+        progress("deck_builder", "Building a sourced deck before card prices or stock affect the selection.")
+        return await self.understand(state)
 
     async def understand(self, state):
         progress("legality","Retrieving current dated format and banned-card evidence.")
@@ -75,7 +90,7 @@ class DeckAgent:
                     except Exception:
                         pass
 
-        kwargs = {}
+        kwargs = {"task": state["route"]} if hasattr(self.planner, "route") else {}
         if state.get("images"):
             kwargs["images"] = state["images"]
         if state.get("preferences"):
@@ -125,34 +140,55 @@ class DeckAgent:
         return {"legality":legality.model_dump(mode="json"),
                 "event":{"type":"cards", "data":{"cards":state["plan"]["cards"], "sources":state["plan"]["sources"], "legality":legality.model_dump(mode="json")}}}
 
-    async def quote(self, state):
-        offers, errors = [], []
+    async def _retrieve(self, state, phase):
+        offers, errors, diagnostics = [], [], []
         cards = AgentPlan.model_validate(state["plan"]).cards
         sem = asyncio.Semaphore(8)
-        lock = asyncio.Lock()
 
-        async def _quote_one(card, supplier):
+        async def one(card, supplier):
             async with sem:
-                trace, public = tool_start("quote_supplier", {"supplier": supplier, "card_id": card.card_id})
+                name = "baseline_prices" if phase == "baseline" else "check_supplier_stock"
+                trace, public = tool_start(name, {"supplier": supplier, "card_id": card.card_id})
                 try:
-                    progress("quote", f"Checking {supplier} quotations for {card.name}.")
-                    found = await self.suppliers.quote(supplier, card)
-                    async with lock:
-                        offers.extend(found)
-                    tool_end(trace, "quote_supplier", public, "complete", [offer.source for offer in found])
+                    if hasattr(self.suppliers, "baseline"):
+                        query = await getattr(self.suppliers, "baseline" if phase == "baseline" else "listings")(supplier, card)
+                    elif phase == "baseline":
+                        query = SupplierQuery(outcome="disabled", message="This adapter does not provide a separate price guide.")
+                    else:
+                        found = await self.suppliers.quote(supplier, card)
+                        query = SupplierQuery(found, "success" if found else "empty", "supplier", "Retrieved prices." if found else "No listings returned; availability is unverified.")
                 except SupplierError as error:
-                    tool_end(trace, "quote_supplier", public, "error")
-                    message = {"supplier": supplier, "message": str(error)}
-                    async with lock:
-                        if message not in errors:
-                            errors.append(message)
+                    query = SupplierQuery(outcome=error.outcome, layer=error.layer, message=str(error), http_status=error.http_status)
+                diagnostic = query.diagnostic(supplier, card, phase)
+                diagnostics.append(diagnostic)
+                offers.extend(query.offers)
+                if query.outcome not in {"success", "empty"}:
+                    error = {"supplier": supplier, "message": query.message, "layer": query.layer, "outcome": query.outcome, "phase": phase}
+                    if error not in errors:
+                        errors.append(error)
+                tool_end(trace, name, public, "complete" if query.outcome in {"success", "empty", "disabled"} else "error",
+                         [offer.source for offer in query.offers], diagnostic=diagnostic)
+        await asyncio.gather(*(one(card, supplier) for card in cards for supplier in ("TCGplayer", "Cardmarket")))
+        return offers, errors, diagnostics
 
-        tasks = [_quote_one(card, supplier) for card in cards for supplier in ("TCGplayer", "Cardmarket")]
-        if tasks:
-            await asyncio.gather(*tasks)
+    async def card_search(self, state):
+        progress("baseline", "Finding baseline card prices without making stock assumptions.")
+        offers, errors, diagnostics = await self._retrieve(state, "baseline")
+        estimates = reference_estimates(AgentPlan.model_validate(state["plan"]).cards, offers)
+        summary = "; ".join(f"{row['supplier']}: {row['product_subtotal']} {row['currency']} ({row['priced_cards']}/{row['requested_cards']} cards)" for row in estimates)
+        event_writer()({"type": "thinking", "data": {"id": uuid.uuid4().hex, "status": "complete", "source": "approach_summary",
+            "summary": ("Baseline price estimates: " + summary if summary else "No baseline prices could be verified.") + " Stock, language, condition and shipping are not confirmed. Checking seller listings next."}})
+        return {"baseline_offers": [offer.model_dump(mode="json") for offer in offers], "supplier_errors": errors,
+                "retrieval_diagnostics": diagnostics,
+                "event": {"type": "progress", "data": {"step": "baseline", "message": "Baseline pricing complete. Checking seller availability and product links."}}}
 
-        return {"offers": [offer.model_dump(mode="json") for offer in offers], "supplier_errors": errors,
-                "event": {"type": "progress", "data": {"step": "quote", "message": f"Retrieved {len(offers)} offers; {len(errors)} supplier limitations.", "limitations": errors}}}
+    async def quote(self, state):
+        progress("availability", "Checking seller stock and purchase links separately from baseline prices.")
+        offers, errors, diagnostics = await self._retrieve(state, "availability")
+        return {"offers": [*state.get("baseline_offers", []), *[offer.model_dump(mode="json") for offer in offers]],
+                "supplier_errors": [*state.get("supplier_errors", []), *errors],
+                "retrieval_diagnostics": [*state.get("retrieval_diagnostics", []), *diagnostics],
+                "event": {"type": "progress", "data": {"step": "availability", "message": f"Seller checks complete: {len(offers)} listing results. Unverified availability is kept separate from confirmed stock shortages.", "limitations": errors}}}
 
     async def review(self, state):
         plan = state["plan"]
@@ -185,18 +221,27 @@ class DeckAgent:
         offers = [Offer.model_validate(row) for row in state["offers"]]
         result = budgets(cards, offers)
         result["reference_estimates"] = reference_estimates(cards, offers)
+        result.update(availability_evidence(cards, offers))
+        shortages = result["stock_shortages"]
         if result["reference_estimates"]:
             result["recommendation"] = "Review the supplier budgets and price-guide estimates below. Price-guide estimates do not establish stock, condition, language, delivery, or a confirmed purchase total. Converted amounts are indicative; the original supplier amounts remain available."
-        advice = await self.planner.alternatives(AgentPlan.model_validate(state["plan"]), result["missing"]) if result["missing"] else ""
-        return {"budget":result, "question":{"kind":"missing_cards", "missing":result["missing"], "guidance":advice,
-                                              "question":"Choose substitutes to research, or explicitly permit retaining these missing cards.", "actions":["substitute", "keep_missing", "cancel"]}}
+        advice = await self.planner.alternatives(AgentPlan.model_validate(state["plan"]), shortages) if shortages else ""
+        return {"budget":result, "question":{"kind":"missing_cards", "missing":shortages, "guidance":advice,
+                                              "question":"The verified listings do not cover these card quantities. Other availability may be unverified. Choose substitutes to research, retain these shortages in the budget, or cancel.", "actions":["substitute", "keep_missing", "cancel"]}}
 
     async def decide(self, state):
         decision = Decision.model_validate(interrupt(state["question"]))
         if decision.action == "cancel":
             return {"cancelled":True}
+        # Re-evaluate a pre-upgrade interruption only after consuming its owner's
+        # decision. Cancellation and explicit substitution requests still apply.
+        refreshed = {}
+        if "stock_shortages" not in state["budget"]:
+            refreshed = await self.missing(state)
+            state = {**state, **refreshed}
         if decision.action == "keep_missing" and decision.approved:
-            return {"consent":{"action":"keep_missing", "missing":state["budget"]["missing"], "approved":True}}
+            return {**refreshed, "consent": {"action":"keep_missing", "missing":state["question"]["missing"], "approved":True}
+                    if state["budget"].get("stock_shortages") else {}}
         if decision.action == "substitute" and decision.approved and decision.text.strip():
             history = list(state.get("history") or [])
             history.append({
@@ -204,7 +249,7 @@ class DeckAgent:
                 "content": {
                     "type": "question",
                     "data": state["question"],
-                    "missing": state["budget"]["missing"],
+                    "missing": state["question"]["missing"],
                     "guidance": state["question"].get("guidance", ""),
                     "plan": state.get("plan"),
                 },
@@ -234,7 +279,7 @@ class DeckAgent:
         result = {"plan":state["plan"], "legality":state["legality"],
                     "offers":state["offers"], **state["budget"], "supplier_errors":state["supplier_errors"],
                     "consent":state.get("consent",{}), "deck_approval":state.get("deck_approval",{}),
-                    "preferences":state.get("preferences",{})}
+                    "preferences":state.get("preferences",{}), "retrieval_diagnostics":state.get("retrieval_diagnostics",[])}
         target = state.get("preferences", {}).get("target_currency")
         if target:
             trace, public = tool_start("convert_currency", {"target_currency": target})

@@ -44,7 +44,8 @@ def test_sse_cards_results_and_persistent_history(client,repo):
     history=client.get(f"/conversations/{conversation['id']}",headers=headers()).json()
     assert history[0]['content']['text']=='exact Test' and history[-1]['content']['type']=='result'
     tools=[row['content']['data'] for row in history if row['content'].get('type')=='tool']
-    assert len(tools)==3 and all(tool['status']=='complete' for tool in tools)
+    assert len(tools)==5 and all(tool['status']=='complete' for tool in tools)
+    assert {tool['name'] for tool in tools} == {'current_legality','baseline_prices','check_supplier_stock'}
     assert client.get(f"/conversations/{conversation['id']}",headers=headers("other")).status_code==404
 
 
