@@ -2,7 +2,7 @@
 """Headless Agent CLI & Programmatic Test Harness.
 
 Executes and verifies Pokémon TCG Agent executions over HTTP/SSE with zero browser dependency.
-Supports direct JWT tokens, browser session cookies, credentials with TOTP MFA,
+Supports managed API tokens, direct JWT tokens, browser session cookies, credentials with TOTP MFA,
 and automated multi-turn decision handling.
 """
 import argparse
@@ -89,16 +89,17 @@ def chat_endpoint(base_url: str, path: str) -> str:
 async def resolve_auth_token(client: httpx.AsyncClient, base_url: str, args: argparse.Namespace) -> str:
     """Resolve an authenticated Bearer token via CLI args, env, cookies, or credentials."""
     auth_url_arg = getattr(args, "auth_url", "")
-    token = args.token or os.getenv("TCG_BEARER_TOKEN", "")
+    token = args.token or ""
     if not token and args.token_file:
         try:
             with open(args.token_file, "r") as f:
                 token = f.read().strip()
-        except Exception as e:
-            print(f"[auth] Failed reading token file {args.token_file}: {e}", file=sys.stderr)
+        except OSError:
+            raise RuntimeError("Could not read the requested token file.") from None
+    token = token or os.getenv("TCG_API_TOKEN", "") or os.getenv("TCG_BEARER_TOKEN", "")
 
     if token:
-        if args.refresh:
+        if args.refresh and not token.startswith("tcg_api_"):
             resp = await client.get(
                 auth_endpoint(base_url, auth_url_arg, "/portal-session"),
                 headers={"Authorization": f"Bearer {token}"},
@@ -153,9 +154,9 @@ async def resolve_auth_token(client: httpx.AsyncClient, base_url: str, args: arg
             if verify_resp.status_code == 200:
                 return verify_resp.json()["access_token"]
             raise RuntimeError(f"TOTP verification failed: HTTP {verify_resp.status_code}")
-        raise RuntimeError(f"Unexpected login response (MFA challenge required): {data}")
+        raise RuntimeError("A human MFA challenge is required. Use a managed API token for unattended tests.")
 
-    raise RuntimeError("No authentication provided. Use --token, --cookie, or --username/--password.")
+    raise RuntimeError("No authentication provided. Set TCG_API_TOKEN or use --token-file.")
 
 
 def match_clarification_choice(options: list[str], auto_clarify: str) -> str:
@@ -177,12 +178,16 @@ def match_clarification_choice(options: list[str], auto_clarify: str) -> str:
 
 
 async def main_async(args: argparse.Namespace) -> int:
+    def report(*values,**kwargs):
+        kwargs.setdefault("file",sys.stderr if args.jsonl else sys.stdout)
+        print(*values,**kwargs)
+
     base_url = args.base_url.rstrip("/")
     async with httpx.AsyncClient(timeout=120) as client:
         try:
             token = await resolve_auth_token(client, base_url, args)
         except Exception as e:
-            print(f"[error] Authentication failed: {e}", file=sys.stderr)
+            report(f"[error] Authentication failed: {e}", file=sys.stderr)
             return 1
 
         headers = {
@@ -196,52 +201,52 @@ async def main_async(args: argparse.Namespace) -> int:
         final_result = None
         turn = 1
 
-        print(f"[run] Starting execution turn {turn}: '{args.prompt}' (model: {args.model})")
+        report(f"[run] Starting execution turn {turn}: '{args.prompt}' (model: {args.model})")
         start_payload = {"text": args.prompt, "model_id": args.model}
 
         async def execute_turn(url: str, payload: dict):
             nonlocal execution_id, conversation_id, final_result
+            pending_question = None
             async for ev_type, ev_data in stream_sse(client, url, payload, headers):
                 if args.jsonl:
                     print(json.dumps({"event": ev_type, "data": ev_data}))
-                    continue
 
                 if ev_type == "execution":
                     execution_id = ev_data.get("id", "")
                     conversation_id = ev_data.get("conversation_id", "")
-                    print(f"[{ev_type}] ID={execution_id} Conversation={conversation_id}")
+                    report(f"[{ev_type}] ID={execution_id} Conversation={conversation_id}")
                 elif ev_type == "progress":
-                    print(f"[{ev_type}] {ev_data.get('step')}: {ev_data.get('message')}")
+                    report(f"[{ev_type}] {ev_data.get('step')}: {ev_data.get('message')}")
                 elif ev_type == "thinking":
                     if ev_data.get("status") == "complete":
                         summary = ev_data.get("summary", "").replace("\n", " ").strip()
-                        print(f"[{ev_type}] {ev_data.get('source')}: {summary[:120]}...")
+                        report(f"[{ev_type}] {ev_data.get('source')}: {summary[:120]}...")
                 elif ev_type == "tool":
                     status = ev_data.get("status")
                     if status != "loading":
                         dur = f" ({ev_data.get('duration_ms')}ms)" if ev_data.get("duration_ms") else ""
                         sources = len(ev_data.get("sources", []))
-                        print(f"[{ev_type}] {ev_data.get('name')}: {status}{dur} · {sources} sources")
+                        report(f"[{ev_type}] {ev_data.get('name')}: {status}{dur} · {sources} sources")
                 elif ev_type == "cards":
                     cards_list = ev_data.get("cards", [])
                     total_qty = sum(c.get("quantity", 1) for c in cards_list)
-                    print(f"[{ev_type}] Resolved {len(cards_list)} printings ({total_qty} total cards).")
+                    report(f"[{ev_type}] Resolved {len(cards_list)} printings ({total_qty} total cards).")
                 elif ev_type == "question":
                     kind = ev_data.get("kind")
                     q_text = ev_data.get("question")
-                    print(f"[{ev_type}] {kind}: {q_text}")
-                    return ev_data
+                    report(f"[{ev_type}] {kind}: {q_text}")
+                    pending_question = ev_data
                 elif ev_type == "result":
                     final_result = ev_data
                     offers_count = len(ev_data.get("offers", []))
                     cards_count = len(ev_data.get("plan", {}).get("cards", []))
-                    print(f"[{ev_type}] Result received! {cards_count} plan cards, {offers_count} supplier offers.")
+                    report(f"[{ev_type}] Result received! {cards_count} plan cards, {offers_count} supplier offers.")
                 elif ev_type == "error":
-                    print(f"[{ev_type}] {ev_data.get('message')}", file=sys.stderr)
+                    report(f"[{ev_type}] {ev_data.get('message')}", file=sys.stderr)
                 elif ev_type == "done":
-                    print(f"[{ev_type}] Status: {ev_data.get('status')}")
+                    report(f"[{ev_type}] Status: {ev_data.get('status')}")
 
-            return None
+            return pending_question
 
         question = await execute_turn(chat_endpoint(base_url, "/executions"), start_payload)
 
@@ -251,13 +256,13 @@ async def main_async(args: argparse.Namespace) -> int:
             kind = question.get("kind")
             if kind == "clarification":
                 if not args.auto_clarify:
-                    print(f"[pause] Paused at clarification question: {question.get('question')}")
-                    print(f"Options: {question.get('options')}")
-                    print("Provide --auto-clarify <choice> to automate multi-turn execution.")
+                    report(f"[pause] Paused at clarification question: {question.get('question')}")
+                    report(f"Options: {question.get('options')}")
+                    report("Provide --auto-clarify <choice> to automate multi-turn execution.")
                     return 2
                 options = question.get("options", [])
                 choice = match_clarification_choice(options, args.auto_clarify)
-                print(f"[resume] Turn {turn} (Clarification): answering '{choice}'")
+                report(f"[resume] Turn {turn} (Clarification): answering '{choice}'")
                 decision_payload = {
                     "action": "clarify",
                     "text": choice,
@@ -266,24 +271,24 @@ async def main_async(args: argparse.Namespace) -> int:
                 }
             elif kind == "deck_approval":
                 if not getattr(args, "approve_deck", False):
-                    print("[pause] Review the deck before supplier pricing. Resume with approve_deck, revise_deck, or cancel.")
-                    print("Use --approve-deck only when you explicitly want to approve generated decks in this run.")
+                    report("[pause] Review the deck before supplier pricing. Resume with approve_deck, revise_deck, or cancel.")
+                    report("Use --approve-deck only when you explicitly want to approve generated decks in this run.")
                     return 2
                 decision_payload = {"action": "approve_deck", "approved": True}
             elif kind == "missing_cards":
                 if not args.auto_missing:
-                    print(f"[pause] Paused at missing cards: {question.get('missing')}")
-                    print("Provide --auto-missing <keep_missing|substitute|cancel> to automate.")
+                    report(f"[pause] Paused at missing cards: {question.get('missing')}")
+                    report("Provide --auto-missing <keep_missing|substitute|cancel> to automate.")
                     return 2
                 act = args.auto_missing.lower()
-                print(f"[resume] Turn {turn} (Missing cards): executing action '{act}'")
+                report(f"[resume] Turn {turn} (Missing cards): executing action '{act}'")
                 decision_payload = {
                     "action": act,
                     "approved": act != "cancel",
                     "text": "Approved" if act == "keep_missing" else act,
                 }
             else:
-                print(f"[error] Unknown question kind '{kind}'", file=sys.stderr)
+                report(f"[error] Unknown question kind '{kind}'", file=sys.stderr)
                 return 1
 
             question = await execute_turn(
@@ -293,28 +298,28 @@ async def main_async(args: argparse.Namespace) -> int:
 
         # Assertions
         if not final_result:
-            print("[failure] Execution ended without final result.", file=sys.stderr)
+            report("[failure] Execution ended without final result.", file=sys.stderr)
             return 1
 
         if args.assert_cards:
             cards = final_result.get("plan", {}).get("cards", [])
             total_qty = sum(c.get("quantity", 1) for c in cards)
             if total_qty < args.assert_cards and len(cards) < args.assert_cards:
-                print(
+                report(
                     f"[assertion error] Total cards ({total_qty}) or unique ({len(cards)}) < asserted {args.assert_cards}",
                     file=sys.stderr,
                 )
                 return 3
-            print(f"[assertion ok] Card count ({total_qty}) >= {args.assert_cards}")
+            report(f"[assertion ok] Card count ({total_qty}) >= {args.assert_cards}")
 
         if args.assert_offers:
             offers = final_result.get("offers", [])
             if not offers:
-                print(f"[assertion error] Expected offers > 0, got 0 offers.", file=sys.stderr)
+                report(f"[assertion error] Expected offers > 0, got 0 offers.", file=sys.stderr)
                 return 4
-            print(f"[assertion ok] Offers retrieved: {len(offers)} offers.")
+            report(f"[assertion ok] Offers retrieved: {len(offers)} offers.")
 
-        print("[success] Execution completed and all assertions passed!")
+        report("[success] Execution completed and all assertions passed!")
         return 0
 
 
@@ -324,7 +329,7 @@ def main():
     parser.add_argument("--model", default="gpt-6-luna", help="Model registry ID")
     parser.add_argument("--base-url", default=os.getenv("TCG_BASE_URL", "http://localhost:8080"), help="Base URL")
     parser.add_argument("--auth-url", default=os.getenv("TCG_AUTH_URL", ""), help="Auth service base URL (if separate from gateway/chat)")
-    parser.add_argument("--token", help="Bearer JWT token")
+    parser.add_argument("--token", help="API token or Bearer JWT (prefer --token-file to avoid shell history)")
     parser.add_argument("--token-file", help="File with Bearer token")
     parser.add_argument("--cookie", help="Browser session cookie value")
     parser.add_argument("--username", help="Username")
