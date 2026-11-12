@@ -2,13 +2,16 @@ import {settingsInputAttributes} from './inputSemantics';
 import {useEffect,useRef,useState} from 'react';
 import {Alert,Box,Button,Checkbox,Flashbar,Form,FormField,Header,Input,Modal,Pagination,Select,SpaceBetween,StatusIndicator,Table,TextFilter} from '@cloudscape-design/components';
 import {api} from './client';
-import {RolePolicies} from './RolePolicies';
+import {IAMAccess} from './IAMAccess';
+import {permits} from './iam';
+import type {IAMRole} from './iam';
+import type {Session} from './contracts';
 import {Overview} from './Overview';
 import {AdminActivity} from './AdminActivity';
 import type {Model} from './contracts';
 
-interface Account {id:string;username:string;role:string;active:boolean}
-export type AdminSection='overview'|'accounts'|'models'|'roles'|'activity';
+interface Account {id:string;username:string;role:string;active:boolean;iam_role_id?:string|null;role_name?:string}
+export type AdminSection='overview'|'accounts'|'models'|'roles'|'principals'|'activity';
 const suggestions=[{label:'GPT 6 luna',value:'gpt-6-luna',provider:'openai'}, {label:'GPT 6.1 terra',value:'gpt-6.1-terra',provider:'openai'}, {label:'Mistral Medium',value:'mistral-medium-latest',provider:'mistral'}];
 const newModel=():Model=>({id:'',label:'',provider:'openai',api_id:'',enabled:false});
 const providerName=(provider:string)=>provider==='openai'?'OpenAI':'Mistral';
@@ -36,35 +39,36 @@ function ModelEditor({model,existingIds,onClose,onSave,creating}:{model:Model;ex
   </Modal>;
 }
 
-function AccountEditor({onClose,onSave}:{onClose:()=>void;onSave:(account:{username:string;password:string;role:string})=>Promise<void>}) {
+function AccountEditor({onClose,onSave,roles,session}:{roles:IAMRole[];session?:Session;onClose:()=>void;onSave:(account:{username:string;password:string;role:string;iam_role_id?:string})=>Promise<void>}) {
   const [username,setUsername]=useState(''),[password,setPassword]=useState(''),[role,setRole]=useState('user'),[busy,setBusy]=useState(false),[submitted,setSubmitted]=useState(false),[error,setError]=useState(''),[discard,setDiscard]=useState(false);
+  useEffect(()=>{if(roles.length)setRole(roles.find(item=>item.builtin_key==='user')?.id||roles[0].id);},[roles]);
   const usernameError=!username?'Enter a username.':username.length>160||!/^[A-Za-z0-9_.@-]+$/.test(username)?'Use up to 160 letters, numbers, dots, underscores, @ signs or hyphens.':'';
   const passwordError=password.length<12||password.length>256?'Use a password between 12 and 256 characters.':'';
   function close(){if(busy)return;if(username||password||role!=='user')setDiscard(true);else onClose();}
-  async function save(){setSubmitted(true);if(usernameError||passwordError||busy)return;setBusy(true);setError('');try{await onSave({username,password,role});setPassword('');onClose();}catch(error){setError((error as Error).message);}finally{setBusy(false);}}
+  async function save(){setSubmitted(true);if(usernameError||passwordError||busy)return;setBusy(true);setError('');try{await onSave({username,password,role:roles.length?'user':role,...(roles.length?{iam_role_id:role}:{})});setPassword('');onClose();}catch(error){setError((error as Error).message);}finally{setBusy(false);}}
   return <Modal visible onDismiss={close} closeAriaLabel="Close account form" header={discard?'Discard account changes?':'Create account'} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs">
     {discard?<><Button onClick={()=>setDiscard(false)}>Keep editing</Button><Button variant="primary" onClick={onClose}>Discard changes</Button></>:<><Button variant="link" disabled={busy} onClick={close}>Cancel</Button><Button data-testid="admin-account-create-button" variant="primary" loading={busy} onClick={()=>void save()}>Create account</Button></>}
   </SpaceBetween></Box>}>
     {discard?<Box>Your unsaved account details will be discarded.</Box>:<Form errorText={error}><SpaceBetween size="l">
       <FormField label="New username" errorText={submitted?usernameError:undefined}><Input data-testid="admin-username-input" name="new-account-username" nativeInputAttributes={settingsInputAttributes} autoComplete="off" autoFocus disabled={busy} value={username} onChange={({detail})=>setUsername(detail.value)}/></FormField>
       <FormField label="Initial password" description="At least 12 characters. Share privately with the account holder." errorText={submitted?passwordError:undefined}><Input data-testid="admin-password-input" name="new-account-password" disabled={busy} type="password" autoComplete="new-password" value={password} onChange={({detail})=>setPassword(detail.value)}/></FormField>
-      <FormField label="Role" description="Users can chat. Administrators can also manage accounts and model policies."><Select data-testid="admin-role-select" disabled={busy} selectedOption={{value:role,label:role==='admin'?'Administrator':'User'}} options={[{value:'user',label:'User'},{value:'admin',label:'Administrator'}]} onChange={({detail})=>setRole(detail.selectedOption.value!)}/></FormField>
+      <FormField label="Role" description="Users can chat. Administrators can also manage accounts and model policies."><Select data-testid="admin-role-select" disabled={busy} selectedOption={{value:role,label:roles.find(item=>item.id===role)?.name||(role==='admin'?'Administrator':'User')}} options={roles.length?roles.map(item=>({value:item.id,label:item.name,disabled:!permits(session,'iam:roles:assign','role:'+item.id)})):[{value:'user',label:'User'},{value:'admin',label:'Administrator'}]} onChange={({detail})=>setRole(detail.selectedOption.value!)}/></FormField>
       <Alert type="info">The account holder will set up two-factor authentication at their first sign-in.</Alert>
     </SpaceBetween></Form>}
   </Modal>;
 }
 
-export function Admin({token,section='models',onNavigate,onSessionChange}:{token:string;section?:AdminSection;onNavigate?:(section:AdminSection)=>void;onSessionChange?:()=>void}) {
+export function Admin({token,section='models',onNavigate,onSessionChange,session}:{token:string;section?:AdminSection;onNavigate?:(section:AdminSection)=>void;onSessionChange?:()=>void;session?:Session}) {
   const [accounts,setAccounts]=useState<Account[]>([]),[models,setModels]=useState<Model[]>([]),[error,setError]=useState(''),[notice,setNotice]=useState(''),[loading,setLoading]=useState(true);
   const [editing,setEditing]=useState<Model|null>(null),[creatingModel,setCreatingModel]=useState(false),[creatingAccount,setCreatingAccount]=useState(false);
-  const [rolesVisited,setRolesVisited]=useState(section==='roles');
-  useEffect(()=>{if(section==='roles')setRolesVisited(true);},[section]);
   const [roleAccount,setRoleAccount]=useState<Account|null>(null),[newRole,setNewRole]=useState('user'),[roleBusy,setRoleBusy]=useState(false),[roleError,setRoleError]=useState('');
   const [filter,setFilter]=useState(''),[page,setPage]=useState(1);
+  const [iamRoles,setIamRoles]=useState<IAMRole[]>([]);
+  useEffect(()=>{if(section!=='accounts'||!permits(session,'iam:roles:read'))return;void api<IAMRole[]>('/api/admin/iam/roles',token).then(rows=>setIamRoles(rows.filter(row=>typeof row.name==='string'&&Array.isArray(row.policy?.statements)))).catch(()=>{});},[token,section]);
   const editorTrigger=useRef<HTMLElement|null>(null);
   useEffect(()=>{if(!editing&&!creatingAccount&&!roleAccount)editorTrigger.current?.focus();},[editing,creatingAccount,roleAccount]);
-  async function refresh(){const [accounts,models]=await Promise.all([api<Account[]>('/api/admin/accounts',token),api<Model[]>('/api/admin/models',token)]);setAccounts(accounts);setModels(models);}
-  useEffect(()=>{if(section==='overview'||section==='roles'||section==='activity')return;setError('');setLoading(true);void refresh().catch(error=>setError(error.message)).finally(()=>setLoading(false));},[token,section]);
+  async function refresh(){if(section==='accounts')setAccounts(await api<Account[]>('/api/admin/accounts',token));else setModels(await api<Model[]>('/api/admin/models',token));}
+  useEffect(()=>{if(section==='overview'||section==='roles'||section==='principals'||section==='activity')return;setError('');setLoading(true);void refresh().catch(error=>setError(error.message)).finally(()=>setLoading(false));},[token,section]);
   useEffect(()=>{setFilter('');setPage(1);},[section]);
   // A successful mutation stays successful if the subsequent list refresh fails.
   async function reload(){try{await refresh();}catch{setError('Your change was saved, but the list could not be refreshed. Refresh the page to see the latest data.');}}
@@ -76,28 +80,28 @@ export function Admin({token,section='models',onNavigate,onSessionChange}:{token
   const tableFilter=<TextFilter filteringText={filter} filteringPlaceholder={section==='accounts'?'Find accounts':'Find models'} filteringAriaLabel={section==='accounts'?'Find accounts':'Find models'} onChange={({detail})=>{setFilter(detail.filteringText);setPage(1);}} countText={`${rows.length} ${rows.length===1?'match':'matches'}`}/>;
   const pagination=<Pagination currentPageIndex={currentPage} pagesCount={Math.max(1,Math.ceil(rows.length/10))} onChange={({detail})=>setPage(detail.currentPageIndex)} ariaLabels={{nextPageLabel:'Next page',previousPageLabel:'Previous page',pageLabel:page=>`Page ${page}`}}/>;
   return <SpaceBetween size="l">
-    <div hidden={section==='roles'||section==='activity'}><SpaceBetween size="l">
-    {section!=='overview'&&<Header variant="h1" description={section==='accounts'?'Manage who can use this private workspace.':'Control which models appear in chat and the provider identifiers they use.'} actions={<Button variant="primary" onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setNotice('');if(section==='accounts')setCreatingAccount(true);else{setCreatingModel(true);setEditing(newModel());}}}>{section==='accounts'?'Create account':'Create model policy'}</Button>}>{section==='accounts'?'Accounts':'Model policies'}</Header>}
+    <div hidden={section==='roles'||section==='principals'||section==='activity'}><SpaceBetween size="l">
+    {section!=='overview'&&<Header variant="h1" description={section==='accounts'?'Manage who can use this private workspace.':'Control which models appear in chat and the provider identifiers they use.'} actions={permits(session,section==='accounts'?'admin:accounts:write':'admin:models:write')?<Button variant="primary" onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setNotice('');if(section==='accounts')setCreatingAccount(true);else{setCreatingModel(true);setEditing(newModel());}}}>{section==='accounts'?'Create account':'Create model policy'}</Button>:undefined}>{section==='accounts'?'Accounts':'Model policies'}</Header>}
     {section!=='overview'&&error&&<Alert type="error" dismissible onDismiss={()=>setError('')}>{error}</Alert>}
     <Flashbar items={notice?[{id:'admin-success',type:'success',content:notice,dismissible:true,dismissLabel:'Dismiss notification',onDismiss:()=>setNotice('')}]:[]}/>
-    {section==='overview'?<Overview token={token} onNavigate={onNavigate}/>:section==='accounts'?<Table data-testid="admin-accounts-table" loading={loading} loadingText="Loading accounts" trackBy="id" header={<Header variant="h2" counter={`(${accounts.length})`}>Accounts</Header>} filter={tableFilter} pagination={pagination} items={filteredAccounts.slice((currentPage-1)*10,currentPage*10)} empty={empty} columnDefinitions={[
-      {id:'username',header:'Username',cell:row=>row.username},{id:'role',header:'Role',cell:row=>row.role==='admin'?'Administrator':'User'},{id:'active',header:'State',cell:row=><StatusIndicator type={row.active?'success':'stopped'}>{row.active?'Active':'Disabled'}</StatusIndicator>},
-      {id:'actions',header:'Actions',cell:row=><Button variant="inline-link" ariaLabel={`Change role for ${row.username}`} onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setRoleAccount(row);setNewRole(row.role);setRoleError('');}}>Change role</Button>}
+    {section==='overview'?<Overview token={token} onNavigate={onNavigate} session={session}/>:section==='accounts'?<Table data-testid="admin-accounts-table" loading={loading} loadingText="Loading accounts" trackBy="id" header={<Header variant="h2" counter={`(${accounts.length})`}>Accounts</Header>} filter={tableFilter} pagination={pagination} items={filteredAccounts.slice((currentPage-1)*10,currentPage*10)} empty={empty} columnDefinitions={[
+      {id:'username',header:'Username',cell:row=>row.username},{id:'role',header:'Role',cell:row=>row.role_name||(row.role==='admin'?'Administrator':'User')},{id:'active',header:'State',cell:row=><StatusIndicator type={row.active?'success':'stopped'}>{row.active?'Active':'Disabled'}</StatusIndicator>},
+      {id:'actions',header:'Actions',cell:row=>permits(session,'admin:accounts:write','account:'+row.id)?<Button variant="inline-link" ariaLabel={`Change role for ${row.username}`}  onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setRoleAccount(row);setNewRole(row.iam_role_id||row.role);setRoleError('');}}>Change role</Button>:null}
     ]}/>:<>
       <Table data-testid="admin-models-table" stickyColumns={{first:1,last:1}} loading={loading} loadingText="Loading model policies" trackBy="id" header={<Header variant="h2" counter={`(${models.length})`} description="Choose Edit on a row to update that specific policy.">Allowed models</Header>} filter={tableFilter} pagination={pagination} items={filteredModels.slice((currentPage-1)*10,currentPage*10)} empty={empty} columnDefinitions={[
         {id:'label',header:'Model',cell:row=><SpaceBetween size="xxs"><Box fontWeight="bold">{row.label}</Box><Box color="text-body-secondary" fontSize="body-s">{row.id}</Box></SpaceBetween>},
         {id:'provider',header:'Provider',cell:row=>providerName(row.provider)},{id:'api',header:'API identifier',cell:row=>row.api_id},
         {id:'state',header:'Availability',cell:row=><StatusIndicator type={row.enabled?'success':'stopped'}>{row.enabled?'Enabled':'Disabled'}</StatusIndicator>},
         {id:'verified',header:'Last verified',cell:row=>row.verified_at?new Date(row.verified_at).toLocaleString():'Unverified'},
-        {id:'edit',header:'Actions',cell:row=><Button data-testid="admin-model-edit-button" variant="inline-link" ariaLabel={`Edit ${row.label}`} onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setNotice('');setCreatingModel(false);setEditing(row);}}>Edit</Button>}
+        {id:'edit',header:'Actions',cell:row=>permits(session,'admin:models:write','model:'+row.id)?<Button data-testid="admin-model-edit-button" variant="inline-link" ariaLabel={`Edit ${row.label}`} onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setNotice('');setCreatingModel(false);setEditing(row);}}>Edit</Button>:null}
       ]}/>
       <Box color="text-body-secondary">Enabling a policy verifies the API identifier with its provider. Invocation failures are reported in chat.</Box>
     </>}
     </SpaceBetween></div>
-    <div hidden={section!=='roles'}>{rolesVisited&&<RolePolicies token={token}/>}</div>
+    {(section==='roles'||section==='principals')&&<IAMAccess token={token} mode={section==='roles'?'roles':'principals'} session={session}/>}
     <div hidden={section!=='activity'}>{section==='activity'&&<AdminActivity token={token}/>}</div>
-    {roleAccount&&<Modal visible header={`Change role for ${roleAccount.username}`} closeAriaLabel="Close role editor" onDismiss={()=>{if(!roleBusy)setRoleAccount(null);}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" disabled={roleBusy} onClick={()=>setRoleAccount(null)}>Cancel</Button><Button variant="primary" loading={roleBusy} disabled={newRole===roleAccount.role} onClick={()=>{if(roleBusy)return;setRoleBusy(true);setRoleError('');void api<Account&{sign_in_again:boolean}>(`/api/admin/accounts/${roleAccount.id}/role`,token,{method:'PUT',body:JSON.stringify({role:newRole})}).then(async result=>{setRoleAccount(null);if(result.sign_in_again){onSessionChange?.();return;}setNotice(`${result.username} role changed to ${result.role==='admin'?'Administrator':'User'}. Existing sessions revoked.`);await reload();}).catch(error=>setRoleError(error.message)).finally(()=>setRoleBusy(false));}}>Save role</Button></SpaceBetween></Box>}><SpaceBetween size="l"><FormField label="Account role"><Select selectedOption={{value:newRole,label:newRole==='admin'?'Administrator':'User'}} options={[{value:'user',label:'User'},{value:'admin',label:'Administrator'}]} onChange={({detail})=>setNewRole(detail.selectedOption.value!)} disabled={roleBusy}/></FormField><Alert type="info">Changing a role revokes the account's existing sessions. The last active administrator cannot be demoted.</Alert>{roleError&&<Alert type="error">{roleError}</Alert>}</SpaceBetween></Modal>}
+    {roleAccount&&<Modal visible header={`Change role for ${roleAccount.username}`} closeAriaLabel="Close role editor" onDismiss={()=>{if(!roleBusy)setRoleAccount(null);}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" disabled={roleBusy} onClick={()=>setRoleAccount(null)}>Cancel</Button><Button variant="primary" loading={roleBusy} disabled={newRole===(roleAccount.iam_role_id||roleAccount.role)} onClick={()=>{if(roleBusy)return;setRoleBusy(true);setRoleError('');void api<Account&{sign_in_again:boolean}>((iamRoles.length?`/api/admin/iam/accounts/${roleAccount.id}/role`:`/api/admin/accounts/${roleAccount.id}/role`),token,{method:'PUT',body:JSON.stringify(iamRoles.length?{role_id:newRole}:{role:newRole})}).then(async result=>{setRoleAccount(null);if(result.sign_in_again){onSessionChange?.();return;}setNotice(`${result.username} role changed to ${result.role_name||(result.role==='admin'?'Administrator':'User')}. Existing sessions revoked.`);await reload();}).catch(error=>setRoleError(error.message)).finally(()=>setRoleBusy(false));}}>Save role</Button></SpaceBetween></Box>}><SpaceBetween size="l"><FormField label="Account role"><Select selectedOption={{value:newRole,label:iamRoles.find(role=>role.id===newRole)?.name||(newRole==='admin'?'Administrator':'User')}} options={iamRoles.length?iamRoles.map(role=>({value:role.id,label:role.name,disabled:!permits(session,'iam:roles:assign','role:'+role.id)})):[{value:'user',label:'User'},{value:'admin',label:'Administrator'}]} onChange={({detail})=>setNewRole(detail.selectedOption.value!)} disabled={roleBusy}/></FormField><Alert type="info">Changing a role revokes the account's existing sessions. At least one human account must retain IAM role-management access.</Alert>{roleError&&<Alert type="error">{roleError}</Alert>}</SpaceBetween></Modal>}
     {editing&&<ModelEditor key={`${creatingModel}-${editing.id}`} model={editing} existingIds={models.map(model=>model.id)} creating={creatingModel} onClose={()=>setEditing(null)} onSave={async model=>{await api(`/api/admin/models/${encodeURIComponent(model.id)}`,token,{method:'PUT',body:JSON.stringify({label:model.label,provider:model.provider,api_id:model.api_id,enabled:model.enabled})});setNotice(`${model.label} model policy saved. ${model.enabled?'Enabled in chat.':'Disabled in chat.'}`);await reload();}}/>}
-    {creatingAccount&&<AccountEditor onClose={()=>setCreatingAccount(false)} onSave={async account=>{await api('/api/admin/accounts',token,{method:'POST',body:JSON.stringify(account)});setNotice(`Account ${account.username} created.`);await reload();}}/>}
+    {creatingAccount&&<AccountEditor roles={iamRoles} session={session} onClose={()=>setCreatingAccount(false)} onSave={async account=>{await api('/api/admin/accounts',token,{method:'POST',body:JSON.stringify(account)});setNotice(`Account ${account.username} created.`);await reload();}}/>}
   </SpaceBetween>;
 }
