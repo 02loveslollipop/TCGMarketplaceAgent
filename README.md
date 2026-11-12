@@ -1,6 +1,6 @@
 # Pokémon TCG Marketplace Agent
 
-An autonomous multi-agent purchasing and deck-building assistant built with **LangGraph**, **LangChain**, and the **Cloudscape Design System**. The system accepts natural language requests for Pokémon Trading Card Game singles and tournament decks, validates card identities and dated format legality, compares real-time marketplace quotations from TCGplayer and Cardmarket, and produces verifiable purchasing budgets with multi-currency conversion.
+A purchasing and deck-building assistant built with **LangGraph**, **LangChain**, and the **Cloudscape Design System**. The system accepts natural language requests for Pokémon Trading Card Game singles and tournament decks, validates card identities and dated format legality, compares baseline price guides and, when enabled, seller quotations from TCGplayer and Cardmarket, and produces verifiable purchasing budgets with multi-currency conversion.
 
 ## Notice
 
@@ -153,56 +153,46 @@ The orchestrator executes a multi-step LangGraph workflow with deterministic sta
 
 ```mermaid
 flowchart TD
-    Start(["Start Request"]) --> Understand["understand<br/>• Resolve card identities via TCGdex<br/>• Extract format/deck requirements<br/>• Retrieve dated legality snapshot"]
-
-    Understand --> ClarifyCond{"Needs clarification?"}
-    ClarifyCond -- "Ambiguous variant / format" --> Clarify["clarify (HITL Interrupt)<br/>Prompt user with selectable options"]
-    Clarify -- "User response" --> Understand
-    Clarify -- "Cancel" --> EndCancel(["Cancelled"])
-
-    ClarifyCond -- "Resolved" --> Validate["validate<br/>• Check Standard / Expanded legality<br/>• Check International / Japan ruleset<br/>• Verify regulation marks & bans"]
-
-    Validate --> DeckCond{"Is 60-card deck?"}
-    DeckCond -- "Yes" --> Review["review (HITL Interrupt)<br/>Present full deck for user review"]
-    Review -- "Approve deck" --> Quote["quote<br/>• Async query TCGplayer listings<br/>• Async query Cardmarket listings<br/>• Bounded concurrency (semaphore)"]
-    Review -- "Request changes" --> Understand
-    Review -- "Cancel" --> EndCancel
-
-    DeckCond -- "No (Singles)" --> Quote
-
-    Quote --> Missing["missing<br/>• Allocate stock & calculate subtotals<br/>• Identify unquoted / missing cards<br/>• Generate researched alternatives"]
-
-    Missing --> MissingCond{"Missing cards found?"}
-    MissingCond -- "Yes" --> Decide["decide (HITL Interrupt)<br/>Prompt user for missing cards consent<br/>or alternative substitutions"]
-    Decide -- "Substitute" --> Understand
-    Decide -- "Keep missing" --> Finish["finish<br/>• Compile supplier budgets<br/>• Format verifiable source citations<br/>• Optional FX currency conversion"]
-    Decide -- "Cancel" --> EndCancel
-
-    MissingCond -- "No" --> Finish
-
-    Finish --> EndDone(["Complete Budget & Plan"])
-
-    classDef stage fill:#e1efff,stroke:#3976b7,stroke-width:1.5px,color:#102a43;
-    classDef interrupt fill:#fff0d6,stroke:#a67522,stroke-width:2px,color:#102a43;
-    classDef stop fill:#fbeae5,stroke:#cf3721,stroke-width:1.5px,color:#102a43;
-    classDef done fill:#d8f3e9,stroke:#258368,stroke-width:1.5px,color:#102a43;
-
-    class Understand,Validate,Quote,Missing stage;
-    class Clarify,Review,Decide interrupt;
-    class EndCancel stop;
-    class Finish,EndDone done;
+    Start(["Start request"]) --> Router["router: deck or specified cards"]
+    Router -- "Build or revise deck" --> Builder["deck_builder: sourced deck research"]
+    Router -- "Specified cards" --> Understand["understand: resolve card identities"]
+    Builder --> Question{"Needs clarification?"}
+    Understand --> Question
+    Question -- "Yes" --> Clarify["clarify: saved user question"]
+    Clarify -- "Answer" --> Router
+    Clarify -- "Cancel" --> Cancel(["Cancelled"])
+    Question -- "No" --> Validate["validate: identity and format legality"]
+    Validate --> Deck{"Deck or 60-card list?"}
+    Deck -- "Yes" --> Review["review: approve deck"]
+    Review -- "Revise" --> Router
+    Review -- "Cancel" --> Cancel
+    Review -- "Approve" --> Baseline["card_search: baseline price guides"]
+    Deck -- "No" --> Baseline
+    Baseline --> Quote["quote: seller stock and product links"]
+    Quote --> Missing["missing: allocate stock and classify evidence"]
+    Missing --> Shortfall{"Verified listing shortfall?"}
+    Shortfall -- "Yes" --> Decide["decide: alternatives or retain shortfall"]
+    Decide -- "Research substitutes" --> Router
+    Decide -- "Cancel" --> Cancel
+    Decide -- "Retain shortfall" --> Finish["finish: budget, sources and optional FX"]
+    Shortfall -- "No; stock may be unverified" --> Finish
+    Finish --> Done(["Budget and estimates"])
 ```
+
+Text equivalent: route the request to deck construction or specified-card research; clarify and validate it; obtain deck approval when applicable; retrieve baseline prices; separately check stock and product links; ask about alternatives only for verified listing shortfalls; return the buying budget with source evidence and optional currency conversion. Follow-ups resume the same execution.
 
 ### Graph node responsibilities
 
-1. **`understand`**: Performs tool-augmented reasoning via the LLM (OpenAI GPT or Mistral) to interpret the user's intent. Queries TCGdex GraphQL, searches tournament lists on Limitless TCG, and checks dated legality evidence to assemble the card specification.
-2. **`clarify`**: An interactive checkpoint triggered when requirements are ambiguous (e.g., distinguishing *Standard (Mega Lucario ex - MEG)* from *Expanded (M Lucario-EX - FFI)*). Pauses execution and returns structured options to the user.
-3. **`validate`**: Performs deterministic ruleset verification against the PostgreSQL catalog, verifying regulation marks (e.g. G, H), set codes, and active ban lists for International and Japanese formats.
-4. **`review`**: Human-in-the-loop deck gate before initiating marketplace pricing. Presents the 60-card deck composition, archetype identity, and legal status to the user for explicit approval or modification requests.
-5. **`quote`**: Executes bounded concurrent queries against TCGplayer and Cardmarket scrapers/APIs via an asynchronous semaphore, retrieving condition, language, unit price, quantity, and seller metadata.
-6. **`missing`**: Compiles preliminary purchase budgets, isolates cards with insufficient seller inventory or unmatched variants, and requests alternative card suggestions.
-7. **`decide`**: Interactive checkpoint allowing the user to either approve substituting missing cards or explicitly consent to proceeding with an incomplete quotation.
-8. **`finish`**: Generates the final budget tables, confirmed supplier totals, reference estimates, and triggers real-time foreign exchange conversion if a target currency was chosen.
+1. **`router`**: Uses a structured model response to select deck construction/revision or research of already specified cards.
+2. **`deck_builder` / `understand`**: Share bounded tool-augmented research for verified card identities, sourced deck lists, user preferences and dated legality evidence. Deck construction must resolve 60 cards before pricing and does not use stock to silently change the deck.
+3. **`clarify`**: Persists an interruption with selectable answers when a format, ruleset or card preference materially changes the result; the answer returns through routing.
+4. **`validate`**: Checks card identity and applicable International/Japan Standard/Expanded legality against the dated catalog and metadata.
+5. **`review`**: Requires explicit deck approval before pricing. Requested revisions return through routing and require a new approval.
+6. **`card_search`**: Retrieves TCGplayer and Cardmarket price-guide references through TCGdex, without inventory assumptions. Market/trend values are preferred to individual low-price references when available.
+7. **`quote`**: Independently checks seller listings through the configured Apify adapters, retaining exact variants, stock, product links and source diagnostics. The current testing configuration disables live scraping; baseline pricing still runs.
+8. **`missing`**: Allocates actual seller inventory once across requested variants, and distinguishes verified listing shortfalls from unverified availability. Empty, disabled, blocked or failed retrieval never proves no stock.
+9. **`decide`**: Asks for explicit substitute research, retention of the listed shortfall, or cancellation. Follow-ups remain in the same saved execution.
+10. **`finish`**: Returns supplier budgets, separate reference estimates, limitations and source links; optionally converts display currency. Unknown shipping and unverified stock never become a confirmed purchase total.
 
 ---
 
@@ -221,9 +211,12 @@ The agent orchestration utilizes a combination of **Model Context Protocol (MCP)
 | **`current_legality`** | Programmatic / Cache | `understand` | Retrieves dated official legality rules and ban lists from the persistent database snapshot. |
 | **`search_deck_lists`** | Programmatic / HTTP | `understand` | Searches Limitless TCG tournament records for competitive archetypes, deck codes, and tournament deck lists. |
 | **`get_deck_list`** | Programmatic / HTTP | `understand` | Fetches complete 60-card tournament deck lists from Limitless TCG, automatically mapping tournament set abbreviations to TCGdex IDs. |
-| **`quote_supplier` (TCGplayer)** | Programmatic / Apify | `quote` | Queries logged-out public marketplace listings (`crawloop/tcgplayer-listings-scraper`) for live prices, seller stock, condition, and shipping. |
-| **`quote_supplier` (Cardmarket)** | Programmatic / Apify | `quote` | Queries logged-out public Cardmarket listings (`phantom_coder/cardmarket-listings-scraper`) using exact researched product URLs. |
+| **`check_supplier_stock` (TCGplayer)** | Programmatic / Apify | `quote` | Queries logged-out public marketplace listings (`crawloop/tcgplayer-listings-scraper`) for live prices, seller stock, condition, and shipping. |
+| **`check_supplier_stock` (Cardmarket)** | Programmatic / Apify | `quote` | Queries logged-out public Cardmarket listings (`phantom_coder/cardmarket-listings-scraper`) using exact researched product URLs. |
+| **`baseline_prices`** | Programmatic / TCGdex | `card_search` | Retrieves separate TCGplayer and Cardmarket price-guide references, never seller stock. |
 | **`convert_currency`** | Programmatic / REST API | `finish` | Keyless real-time currency conversion via ExchangeRate-API open endpoint with minor-unit rounding and 24-hour local caching. |
+
+Retrieval events and the final budget retain the source layer, stage, outcome, HTTP status when available, retrieval time and a safe diagnostic message. MCP transport errors, webpage challenges, Apify failures and disabled searches are distinguished from actual listing evidence; raw credentials and response bodies are excluded. `APIFY_LIVE_SCRAPE=false` currently leaves seller availability unverified.
 
 ### Web Search MCP server (`ddg-mcp`)
 
