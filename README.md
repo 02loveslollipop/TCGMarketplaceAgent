@@ -142,6 +142,8 @@ Live post-deployment pytest scenarios and the manual research suite are document
 
 See the [hosted validation record](docs/ci/validation-2026-11-13.md) for the verified deck, exact-card and collection scenarios, example budgets and explicit availability limits.
 
+The admin [consumption dashboard and execution workspace](docs/admin-observability.md) provide user/API-principal usage, historical-role breakdowns, current quotas and snapshotted model cost estimates.
+
 ### 5. Updating the dated legality catalog
 
 To synchronize the latest Pokémon TCG sets, regulation marks, and ban lists from TCGdex and official sources:
