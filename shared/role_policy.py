@@ -115,12 +115,16 @@ class RolePolicies:
                 raise PolicyError('This model is not enabled for your role.',403)
             self.check(session.get(DailyTokenUsage,(user_id,usage_day())),policy['daily_token_limit'],utcnow())
 
-    def begin_call(self,user_id,role,model_id):
+    def begin_call(self,user_id,role,model_id,*,principal_name=None,principal_type='user',execution_id=None,expected_provider=None,expected_api_id=None):
         now=utcnow();day=usage_day(now);call_id=str(uuid4())
         with self.repo.transaction() as session:
             policy=read_policy(session,role)
             if not permitted(policy['statements'],'agent:models:invoke','model:'+model_id):
                 raise PolicyError('This model is not enabled for your role.',403)
+            from shared.db import ModelPolicy
+            model=session.get(ModelPolicy,model_id)
+            if expected_provider is not None and (model is None or not model.enabled or (model.provider,model.api_id)!=(expected_provider,expected_api_id)):
+                raise PolicyError('Model policy changed before call admission. No model call was started.',503)
             # Insert once, then lock the user's daily row before admitting a call.
             if session.bind.dialect.name=='postgresql':
                 from sqlalchemy.dialects.postgresql import insert
@@ -130,6 +134,13 @@ class RolePolicies:
             row=session.scalar(select(DailyTokenUsage).where(DailyTokenUsage.user_id==user_id,DailyTokenUsage.usage_date==day).with_for_update())
             self.check(row,policy['daily_token_limit'],now)
             row.active_call_id=call_id;row.active_until=now+timedelta(minutes=3)
+            from shared.consumption import price_snapshot
+            session.add(AuditLog(id=call_id,execution_id=execution_id,action='model_call_started',details={
+                'call_id':call_id,'principal_id':user_id,'principal_name':principal_name or user_id,'principal_type':principal_type,
+                'role_id':BUILTIN_ROLE_IDS.get(role,role),'role_name':policy.get('role_name',role),
+                'daily_token_limit':policy['daily_token_limit'],
+                'model_id':model_id,'provider':model.provider if model else None,'api_id':model.api_id if model else None,
+                'usage_date':day.isoformat(),'started_at':now.isoformat(),'pricing':price_snapshot(session,model)}))
         return day,call_id
 
     def finish_call(self,user_id,ticket,usage,*,rejected=False):
@@ -141,4 +152,12 @@ class RolePolicies:
                 row.input_tokens+=usage['input_tokens'];row.output_tokens+=usage['output_tokens'];row.total_tokens+=usage['input_tokens']+usage['output_tokens']
             elif not rejected:
                 row.unverified_usage=True
+            from shared.consumption import estimate
+            started=session.get(AuditLog,call_id)
+            if started:
+                snapshot=dict(started.details)
+                session.add(AuditLog(execution_id=started.execution_id,action='model_usage',details={**snapshot,
+                    'status':'verified' if usage is not None else 'rejected' if rejected else 'unverified',
+                    'input_tokens':usage['input_tokens'] if usage else 0,'output_tokens':usage['output_tokens'] if usage else 0,
+                    'estimated_cost_usd':estimate(usage,snapshot.get('pricing')),'finished_at':utcnow().isoformat()}))
             row.active_call_id=None;row.active_until=None

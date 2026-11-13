@@ -438,6 +438,11 @@ class Repository:
                 .order_by(Execution.created_at.desc())
                 .limit(limit)
             ).all()
+            from shared.consumption import execution_usage
+            ids=[e.id for e,_ in rows]
+            logs=list(session.scalars(select(AuditLog).where(AuditLog.execution_id.in_(ids),AuditLog.action=='model_usage'))) if ids else []
+            by_execution={key:[] for key in ids}
+            for log in logs:by_execution[log.execution_id].append(log)
             return [
                 {
                     "id": e.id,
@@ -447,11 +452,13 @@ class Repository:
                     "model_id": e.model_id,
                     "status": e.status,
                     "created_at": e.created_at.isoformat(),
+                    "usage":execution_usage(by_execution[e.id]),
                 }
                 for e, title in rows
             ]
 
     def admin_execution_detail(self, execution_id: str) -> dict:
+        from shared.consumption import execution_usage
         with self.transaction() as session:
             row = session.execute(
                 select(Execution, Conversation.title)
@@ -547,6 +554,7 @@ class Repository:
                 "created_at": execution.created_at.isoformat(),
                 "checkpoint": checkpoint,
                 "reasoning_summary": reasoning_summary,
+                "usage":execution_usage(logs),
                 "events": events_deduped,
                 "messages": [
                     {

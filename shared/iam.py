@@ -25,6 +25,7 @@ ACTIONS={
  'admin:models:read':'Read model policies',
  'admin:models:write':'Change model policies',
  'admin:activity:read':'Inspect execution activity',
+ 'admin:usage:read':'Inspect principal and historical role consumption',
  'admin:legality:read':'Read legality sync status',
  'admin:legality:refresh':'Refresh the legality catalog',
  'iam:roles:read':'Read IAM roles and policies',

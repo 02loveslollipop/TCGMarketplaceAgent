@@ -1,7 +1,7 @@
 import asyncio
 from contextlib import suppress
 import json
-from fastapi import Depends, HTTPException, Request
+from fastapi import Depends, HTTPException, Request, Query
 from fastapi.responses import StreamingResponse, JSONResponse
 from pydantic import BaseModel, Field
 from shared.api import application, require_permission
@@ -9,7 +9,7 @@ from shared.contracts import ChatInput, ConversationRenamePayload, Decision, Use
 from shared.repository import NotFound
 from services.admin.app import serialize_model
 from services.orchestrator.legality_sync import sync_legality
-from services.orchestrator.models import ModelUnavailable, verify_api_id, invocation_context
+from services.orchestrator.models import ModelUnavailable, verify_api_id, invocation_context, execution_context
 from shared.role_policy import RolePolicies, PolicyError
 from services.orchestrator.exchange import exchange_rates, ExchangeUnavailable
 
@@ -123,9 +123,17 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
         return sync_legality(repo, triggered_by=f"admin:{user.username}")
 
     @app.get("/internal/activity")
-    def internal_activity(user=Depends(current)):
+    def internal_activity(limit:int=Query(default=50,ge=1,le=500),user=Depends(current)):
         require_permission(user,'admin:activity:read')
-        return repo.admin_executions(limit=50)
+        return repo.admin_executions(limit=limit)
+
+    @app.get('/internal/consumption')
+    def consumption(start: str|None=None,end: str|None=None,principal_id: str|None=None,role_id: str|None=None,model_id: str|None=None,user=Depends(current)):
+        from datetime import date
+        from shared.consumption import report
+        require_permission(user,'admin:usage:read')
+        try:return report(repo,date.fromisoformat(start) if start else None,date.fromisoformat(end) if end else None,principal_id,role_id,model_id)
+        except ValueError as error:raise HTTPException(422,str(error)) from None
 
     @app.get("/internal/activity/{execution_id}")
     def internal_activity_detail(execution_id: str, user=Depends(current)):
@@ -153,6 +161,7 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
             iterator = agent.stream(execution.id,user.id,**kwargs).__aiter__()
             pending = None
             context_token=invocation_context.set((user,current))
+            execution_token=execution_context.set(execution.id)
             try:
                 while True:
                     pending = asyncio.create_task(anext(iterator))
@@ -186,7 +195,9 @@ def create_app(repo, current, agent_factory, verifier=verify_api_id):
                     with suppress(asyncio.CancelledError):
                         await pending
                 try:await iterator.aclose()
-                finally:invocation_context.reset(context_token)
+                finally:
+                    invocation_context.reset(context_token)
+                    execution_context.reset(execution_token)
         return StreamingResponse(events(),media_type="text/event-stream",headers={"Cache-Control":"no-cache, no-store","X-Accel-Buffering":"no"})
 
     @app.post("/executions")

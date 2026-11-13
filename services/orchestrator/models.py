@@ -21,6 +21,7 @@ def _finished(task):
     if not task.cancelled():task.exception()  # Consume errors if the HTTP client disconnected.
 
 invocation_context=ContextVar("model_invocation_context",default=None)
+execution_context=ContextVar('model_execution_id',default=None)
 
 
 class TokenUsageCallback(BaseCallbackHandler):
@@ -55,7 +56,9 @@ class GuardedModel:
         # Refresh session and role, so a mid-run role change revokes further calls.
         principal=await authenticate(token=principal.token)
         policies=RolePolicies(self.repo)
-        ticket=policies.begin_call(principal.id,principal.role,self.policy.id)
+        ticket=policies.begin_call(principal.id,principal.role,self.policy.id,
+            principal_name=principal.username,principal_type=getattr(principal,'principal_type','user'),execution_id=execution_context.get(),
+            expected_provider=self.policy.provider,expected_api_id=self.policy.api_id)
         async def invoke_and_account():
             callback = TokenUsageCallback()
             reasoning_cb = ReasoningSummaryCallback()
