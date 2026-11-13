@@ -68,12 +68,23 @@ class Offer(Contract):
     identity_source: Source | None = None
 
 
+class CollectionGoal(Contract):
+    subject: str = Field(min_length=1,max_length=160)
+    budget_amount: Decimal = Field(gt=0,allow_inf_nan=False)
+    currency: str = Field(pattern=r"^[A-Z]{3}$")
+    prefer_full_art: bool = False
+    max_printings: int | None = Field(default=None,ge=1,le=60)
+    copies_per_printing: int = Field(default=1,ge=1,le=60)
+
+
 class AgentPlan(Contract):
     question: str | None = None
     options: list[str] = Field(default_factory=list, max_length=8)
     ruleset: str | None = None
     format: str | None = None
     is_deck: bool = False
+    purpose: Literal["cards", "deck", "collection"] = "cards"
+    collection: CollectionGoal | None = None
     cards: list[CardRequest] = Field(default_factory=list, max_length=60)
     sources: list[Source] = Field(default_factory=list)
     explanation: str = ""
@@ -83,6 +94,7 @@ class Legality(Contract):
     status: Literal["verified", "unverified"]
     issues: list[str] = Field(default_factory=list)
     sources: list[Source] = Field(default_factory=list)
+    applicable: bool = True
 
 
 class Decision(Contract):

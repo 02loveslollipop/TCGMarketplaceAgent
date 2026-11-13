@@ -78,13 +78,15 @@ class ResearchError(ValueError):
 def source_error(text, layer="webpage"):
     """Classify bounded failure metadata without echoing untrusted response text."""
     lowered = text.casefold()
-    status = re.search(r"(?:http\s*|status(?: code)?[: =]*)(401|402|403|404|429|5\d\d)\b", lowered)
+    status = re.search(r"(?:http\s*|status(?: code)?[: =]*)(202|401|402|403|404|429|5\d\d)\b", lowered)
     code = int(status.group(1)) if status else None
     outcome = {401:"unauthorized", 402:"billing_required", 403:"blocked", 404:"not_found", 429:"rate_limited"}.get(code, "http_error" if code else "unavailable")
     if any(marker in lowered for marker in ("captcha", "verify you are human", "just a moment", "checking your browser", "access denied")):
         outcome = "blocked"
     elif "timeout" in lowered or "timed out" in lowered:
         outcome = "timeout"
+    elif 'network error' in lowered:
+        outcome = 'network_error'
     return ResearchError(f"{layer.upper()} retrieval could not complete; no stock conclusion can be drawn.", layer=layer, outcome=outcome, http_status=code)
 
 
@@ -187,7 +189,7 @@ class Research:
             raise ResearchError("Webpage address resolution failed.", layer="webpage", outcome="network_error") from error
         except ValueError as error:
             raise ResearchError("Webpage URL was rejected by the public HTTPS policy.", layer="webpage", outcome="url_rejected") from error
-        text = await self._call_ddg_mcp_tool("fetch_content", {"url": url, "max_length": 20000, "backend": "auto", "parse_mode": "markdown"})
+        text = await self._call_ddg_mcp_tool("fetch_content", {"url": url, "max_length": 20000, "backend": "httpx", "parse_mode": "markdown"})
         text = re.sub(r"\n\n---\n\[Content info:.*?\]$", "", text, flags=re.DOTALL).strip()
         if text.startswith("Error:") or any(marker in text.casefold() for marker in ("verify you are human", "just a moment...", "checking your browser")):
             raise source_error(text)

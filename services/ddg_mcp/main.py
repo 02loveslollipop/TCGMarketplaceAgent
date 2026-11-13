@@ -1,5 +1,7 @@
 import asyncio
 import os
+from contextvars import ContextVar
+import httpx
 from starlette.applications import Starlette
 from starlette.middleware import Middleware
 from starlette.middleware.base import BaseHTTPMiddleware
@@ -13,6 +15,36 @@ from shared.url_security import public_https
 
 class PublicHttpsBlockedError(ddg_server.BlockedURLError, ValueError):
     pass
+
+
+_search_failure=ContextVar('search_failure',default=None)
+
+
+class PublicSearcher(ddg_server.DuckDuckGoSearcher):
+    """Keep blocked/failed searches distinct from a genuine empty result."""
+    async def _request(self,data,ctx):
+        try:
+            status,html=await self._request_httpx(data)
+        except httpx.HTTPStatusError as error:
+            _search_failure.set(f'Search HTTP {error.response.status_code}; access denied.' if error.response.status_code==403 else f'Search HTTP {error.response.status_code}.')
+            raise
+        except httpx.TimeoutException:
+            _search_failure.set('Search timeout.');raise
+        except httpx.HTTPError:
+            _search_failure.set('Search network error.');raise
+        if status in {202,403} or any(marker in html.casefold() for marker in ['captcha','challenge-form','anomaly-modal']):
+            _search_failure.set(f'Search HTTP {status} CAPTCHA/challenge; no bypass attempted.')
+            return ''
+        return html
+
+    async def search(self,*args,**kwargs):
+        context=_search_failure.set(None)
+        try:
+            rows=await super().search(*args,**kwargs)
+            failure=_search_failure.get()
+            if failure:raise RuntimeError(failure)
+            return rows
+        finally:_search_failure.reset(context)
 
 
 class PublicHttpsWebContentFetcher(ddg_server.WebContentFetcher):
@@ -51,17 +83,19 @@ class PublicHttpsWebContentFetcher(ddg_server.WebContentFetcher):
             ctx,
             start_index=start_index,
             max_length=max_length,
-            backend=backend,
+            # A 403/challenge is a retrieval limitation. Never escalate to
+            # the library's curl/impersonation fallback after being blocked.
+            backend='httpx',
             parse_mode=parse_mode,
         )
 
 
-search_backend = os.getenv("DDG_SEARCH_BACKEND", "auto").lower()
-fetch_backend = os.getenv("DDG_FETCH_BACKEND", "auto").lower()
+search_backend = 'httpx'
+fetch_backend = 'httpx'
 parse_mode = os.getenv("DDG_PARSE_MODE", "markdown").lower()
 ref_url_threshold = int(os.getenv("DDG_REF_URL_THRESHOLD", "0"))
 
-ddg_server.searcher = ddg_server.DuckDuckGoSearcher(
+ddg_server.searcher = PublicSearcher(
     backend=search_backend,
     ref_url_threshold=ref_url_threshold,
     safe_search=ddg_server.safe_search,

@@ -11,7 +11,8 @@ from services.orchestrator.checkpoints import DatabaseSaver
 from services.orchestrator.suppliers import SupplierError, SupplierQuery
 from services.orchestrator.progress import progress
 from services.orchestrator.trace import tool_start, tool_end, event_writer
-from services.orchestrator.exchange import exchange_rates
+from services.orchestrator.exchange import exchange_rates, ExchangeUnavailable
+from services.orchestrator.collection import select_collection
 
 
 class State(TypedDict, total=False):
@@ -33,6 +34,7 @@ class State(TypedDict, total=False):
     deck_approval: dict
     event: dict
     cancelled: bool
+    collection_summary: dict
 
 
 class DeckAgent:
@@ -40,16 +42,18 @@ class DeckAgent:
         self.repo, self.planner, self.suppliers = repo, planner, suppliers
         self.exchange = exchange or exchange_rates
         builder = StateGraph(State)
-        for name in ("router", "deck_builder", "understand", "clarify", "validate", "review", "card_search", "quote", "missing", "decide", "finish"):
+        for name in ("router", "deck_builder", "collection_builder", "understand", "clarify", "validate", "review", "card_search", "collection_budget", "quote", "missing", "decide", "finish"):
             builder.add_node(name, getattr(self, name))
         builder.add_edge(START, "router")
-        builder.add_conditional_edges("router", lambda state: "deck_builder" if state["route"] == "deck" else "understand")
+        builder.add_conditional_edges("router", lambda state: "deck_builder" if state["route"] == "deck" else "collection_builder" if state['route']=='collection' else "understand")
         builder.add_conditional_edges("deck_builder", lambda state: "clarify" if state["plan"].get("question") else "validate")
         builder.add_conditional_edges("understand", lambda state:"clarify" if state["plan"].get("question") else "validate")
+        builder.add_conditional_edges("collection_builder", lambda state:'clarify' if state['plan'].get('question') else 'validate')
         builder.add_conditional_edges("clarify", lambda state:END if state.get("cancelled") else "router")
-        builder.add_conditional_edges("validate", lambda state:"review" if state["plan"].get("is_deck") or sum(card["quantity"] for card in state["plan"]["cards"]) == 60 else "card_search")
+        builder.add_conditional_edges("validate", lambda state:"review" if state['plan'].get('purpose')!='collection' and (state["plan"].get("is_deck") or sum(card["quantity"] for card in state["plan"]["cards"]) == 60) else "card_search")
         builder.add_conditional_edges("review", lambda state:END if state.get("cancelled") else "router" if state.get("deck_approval",{}).get("action")=="revise_deck" else "card_search")
-        builder.add_edge("card_search", "quote")
+        builder.add_conditional_edges('card_search',lambda state:'collection_budget' if state['plan'].get('purpose')=='collection' else 'quote')
+        builder.add_edge('collection_budget','quote')
         builder.add_edge("quote", "missing")
         builder.add_conditional_edges("missing", lambda state:"decide" if state["budget"].get("stock_shortages", []) else "finish")
         builder.add_conditional_edges("decide", lambda state:END if state.get("cancelled") else "router" if state.get("consent",{}).get("action")=="substitute" else "finish")
@@ -65,11 +69,16 @@ class DeckAgent:
         progress("deck_builder", "Building a sourced deck before card prices or stock affect the selection.")
         return await self.understand(state)
 
+    async def collection_builder(self,state):
+        progress('collection_builder','Researching collectible printings and art preferences before selecting an affordable collection.')
+        return await self.understand(state)
+
     async def understand(self, state):
         progress("legality","Retrieving current dated format and banned-card evidence.")
         trace,public=tool_start("current_legality",{})
         try:
-            knowledge = await self.planner.research.legality_knowledge()
+            knowledge = ({'official_sources':[], 'scope':'Collection metadata only; tournament legality is not a collecting restriction.'}
+                         if state.get('route')=='collection' else await self.planner.research.legality_knowledge())
             tool_end(trace,"current_legality",public,"complete",knowledge.get("official_sources",[]))
         except Exception:
             tool_end(trace,"current_legality",public,"error")
@@ -99,7 +108,7 @@ class DeckAgent:
             plan = await self.planner.resolve(state["request"], state.get("history", []), knowledge, **kwargs)
         except TypeError:
             plan = await self.planner.resolve(state["request"], state.get("history", []), knowledge)
-        return {"knowledge":knowledge, "plan":plan.model_dump(mode="json"), "consent":{}, "deck_approval":{},
+        return {"knowledge":knowledge, "plan":plan.model_dump(mode="json"), "consent":{}, "deck_approval":{}, "collection_summary":{},
                 "event":{"type":"progress", "data":{"step":"understand", "message":plan.question or "Resolved actual card/deck identities and preferences."}}}
 
     async def clarify(self, state):
@@ -136,9 +145,10 @@ class DeckAgent:
 
     async def validate(self, state):
         plan = AgentPlan.model_validate(state["plan"])
-        legality = await self.planner.legality(plan, state["knowledge"])
+        legality = (Legality(status='unverified',applicable=False,sources=plan.sources)
+                    if plan.purpose=='collection' else await self.planner.legality(plan, state["knowledge"]))
         return {"legality":legality.model_dump(mode="json"),
-                "event":{"type":"cards", "data":{"cards":state["plan"]["cards"], "sources":state["plan"]["sources"], "legality":legality.model_dump(mode="json")}}}
+                "event":{"type":"cards", "data":{"cards":state["plan"]["cards"], "sources":state["plan"]["sources"], "legality":legality.model_dump(mode="json"),"purpose":plan.purpose}}}
 
     async def _retrieve(self, state, phase):
         offers, errors, diagnostics = [], [], []
@@ -181,6 +191,26 @@ class DeckAgent:
         return {"baseline_offers": [offer.model_dump(mode="json") for offer in offers], "supplier_errors": errors,
                 "retrieval_diagnostics": diagnostics,
                 "event": {"type": "progress", "data": {"step": "baseline", "message": "Baseline pricing complete. Checking seller availability and product links."}}}
+
+    async def collection_budget(self,state):
+        progress('collection_budget','Selecting researched printings within the product budget using dated exchange rates.')
+        plan=AgentPlan.model_validate(state['plan']);snapshot=None
+        trace,public=tool_start('select_collection',{'candidate_count':len(plan.cards),'currency':plan.collection.currency,'budget':str(plan.collection.budget_amount)})
+        try:
+            snapshot=await self.exchange.snapshot()
+        except ExchangeUnavailable:
+            # Same-currency evidence can still be selected. Cross-currency
+            # evidence without a verified rate is excluded, never guessed.
+            pass
+        selected,summary=select_collection(plan,[Offer.model_validate(x) for x in state.get('baseline_offers',[])],self.planner.research.cards,snapshot)
+        tool_end(trace,'select_collection',public,'complete' if summary['status']=='selected' else 'error',
+                 [line['source'] for line in summary['lines']],diagnostic={'layer':'collection','outcome':summary['status'],'message':f"Selected {len(selected.cards)} researched printings. Shipping and stock remain unverified."})
+        # Keep original evidence in diagnostics; only selected card offers
+        # belong to the resulting purchase proposal.
+        selected_names={(c.name,c.set_name,c.number) for c in selected.cards}
+        offers=[o for o in state.get('baseline_offers',[]) if (o['name'],o.get('set_name'),o.get('number')) in selected_names]
+        return {'plan':selected.model_dump(mode='json'),'collection_summary':summary,'baseline_offers':offers,
+                'event':{'type':'cards','data':{'cards':selected.model_dump(mode='json')['cards'],'sources':state['plan']['sources'],'legality':state['legality'],'purpose':'collection'}}}
 
     async def quote(self, state):
         progress("availability", "Checking seller stock and purchase links separately from baseline prices.")
@@ -225,6 +255,10 @@ class DeckAgent:
         shortages = result["stock_shortages"]
         if result["reference_estimates"]:
             result["recommendation"] = "Review the supplier budgets and price-guide estimates below. Price-guide estimates do not establish stock, condition, language, delivery, or a confirmed purchase total. Converted amounts are indicative; the original supplier amounts remain available."
+        if state.get('collection_summary'):
+            summary=state['collection_summary']
+            result['recommendation']=(f"Selected {summary['selected_printings']} collectible printings from {summary['researched_candidates']} researched candidates within a {summary['budget_amount']} {summary['currency']} product budget. Shipping, taxes, condition and availability remain unverified."
+                                      if summary['status']=='selected' else 'No affordable collection could be established from convertible, verified price references. Review the candidate and exchange-rate limitations before changing the budget.')
         advice = await self.planner.alternatives(AgentPlan.model_validate(state["plan"]), shortages) if shortages else ""
         return {"budget":result, "question":{"kind":"missing_cards", "missing":shortages, "guidance":advice,
                                               "question":"The verified listings do not cover these card quantities. Other availability may be unverified. Choose substitutes to research, retain these shortages in the budget, or cancel.", "actions":["substitute", "keep_missing", "cancel"]}}
@@ -280,7 +314,8 @@ class DeckAgent:
                     "offers":state["offers"], **state["budget"], "supplier_errors":state["supplier_errors"],
                     "consent":state.get("consent",{}), "deck_approval":state.get("deck_approval",{}),
                     "preferences":state.get("preferences",{}), "retrieval_diagnostics":state.get("retrieval_diagnostics",[])}
-        target = state.get("preferences", {}).get("target_currency")
+        if state.get('collection_summary'):result['collection_summary']=state['collection_summary']
+        target = state.get("preferences", {}).get("target_currency") or (state.get('plan',{}).get('collection') or {}).get('currency')
         if target:
             trace, public = tool_start("convert_currency", {"target_currency": target})
             result = await self.exchange.convert(result, target)
