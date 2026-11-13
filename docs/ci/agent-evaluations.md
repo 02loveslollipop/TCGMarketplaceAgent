@@ -1,5 +1,7 @@
 # Live agent evaluations and CI
 
+The [13 November 2026 validation record](validation-2026-11-13.md) links the successful hosted runs and documents their measured results and limitations.
+
 ## Workflow arrangement
 
 `deploy-heroku.yml` first runs the ordinary test workflow and deploys MCP → chat → admin → auth, checking health after each. Its `test-agent` job depends on `deploy-heroku` and calls the separate reusable `test-agent-live.yml` workflow. A failed deployment never starts the live agent tests. The existing deployment concurrency lock stays held through the post-deployment checks.

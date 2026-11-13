@@ -140,6 +140,8 @@ npm --prefix frontend run build
 
 Live post-deployment pytest scenarios and the manual research suite are documented in [Agent evaluations and CI](docs/ci/agent-evaluations.md). The Heroku workflow runs smoke tests only after all services deploy successfully.
 
+See the [hosted validation record](docs/ci/validation-2026-11-13.md) for the verified deck, exact-card and collection scenarios, example budgets and explicit availability limits.
+
 ### 5. Updating the dated legality catalog
 
 To synchronize the latest Pokémon TCG sets, regulation marks, and ban lists from TCGdex and official sources:
