@@ -17,6 +17,7 @@
     "@cloudscape-design/design-tokens": "^3.0.117",
     "@cloudscape-design/global-styles": "^1.0.0",
     "@simplewebauthn/browser": "^14.0.0",
+    "exceljs": "^4.4.0",
     "qrcode.react": "^4.2.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1"
@@ -34,5 +35,10 @@
     "typescript": "^5.7.0",
     "vite": "^6.1.0",
     "vitest": "^5.1.0"
+  },
+  "overrides": {
+    "exceljs": {
+      "uuid": "^11.1.1"
+    }
   }
 }

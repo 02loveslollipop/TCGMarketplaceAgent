@@ -4,6 +4,7 @@ import type {BudgetLine,Card,Legality,Missing,Result,Source} from './contracts';
 import {safeHref} from './client';
 import {Markdown} from './Markdown';
 import {Price,ExchangeRateDetails} from './Currency';
+import {BudgetDownload} from './BudgetDownload';
 
 function variantDetails(card:BudgetLine|Missing):string {
   return [card.set_name,card.number&&`#${card.number}`,card.condition,card.language,card.printing].filter(Boolean).join(' · ') || 'Variant details unavailable';
@@ -49,7 +50,7 @@ export function BudgetResults({result}:{result:Result}) {
   const estimates=result.reference_estimates||[];
   const money=(amount:string,currency:string,converted?:string|null)=><Price amount={amount} currency={currency} converted={converted} conversion={conversion} original={original}/>;
   return <SpaceBetween size="l">
-    <Container header={<Header variant="h3" actions={conversion?.status==='available'?<SegmentedControl label="Price view" selectedId={priceView} onChange={({detail})=>setPriceView(detail.selectedId)} options={[{id:'converted',text:`${conversion.target_currency} estimates`},{id:'original',text:'Original currencies'}]}/>:undefined}>Buying budget</Header>}>
+    <Container header={<Header variant="h3" actions={<SpaceBetween direction="horizontal" size="xs"><BudgetDownload result={result}/>{conversion?.status==='available'&&<SegmentedControl label="Price view" selectedId={priceView} onChange={({detail})=>setPriceView(detail.selectedId)} options={[{id:'converted',text:`${conversion.target_currency} estimates`},{id:'original',text:'Original currencies'}]}/>}</SpaceBetween>}>Buying budget</Header>}>
       <SpaceBetween size="m">
         <div className="chat-message-text"><Markdown text={result.recommendation||'Review the buying costs and coverage below.'}/></div>
         <Box color="text-body-secondary">{result.plan.format} · {result.plan.cards.reduce((sum,card)=>sum+card.quantity,0)} requested cards · {result.offers.length} retrieved prices</Box>
