@@ -42,7 +42,7 @@ API credentials always have an agent-only ceiling regardless of inherited permis
 
 ## Scenarios and correctness
 
-The smoke suite asks for an exact two-card basket and an explicit printing clarification. The extended suite adds sourced Mega Gardevoir ex and Charizard ex decks, plus a Gardevoir collection with a 150,000 JPY product budget and a preference for full-art/illustration cards, including non-secret variants.
+The smoke suite asks for an exact two-card basket and an explicit printing clarification. The extended suite adds sourced Mega Gardevoir ex and Mega Charizard X ex decks, plus a Gardevoir collection with a 150,000 JPY product budget and a preference for full-art/illustration cards, including non-secret variants.
 
 Tests assert structured outcomes instead of exact wording:
 
@@ -55,7 +55,7 @@ Tests assert structured outcomes instead of exact wording:
 
 Fixtures are sequential because tokens for one principal share a quota/admission counter. Suite startup verifies the API principal, allowed model, quota and settled usage. It snapshots the principal’s preferences, temporarily selects JPY and a Tokyo shopping guide, then restores the original values even on failure. It never changes human settings or IAM policies.
 
-Each scenario has a deadline and bounded follow-up decisions. Executions and resumes are not retried automatically: restarting them can duplicate provider charges. The suite checks a token-spend ceiling before starting each new scenario (150,000 for smoke; 1,000,000 for extended). These are admission limits, not exact provider-call caps; an admitted response can finish beyond them. A model error, incomplete SSE turn, unresolved unexpected question or exhausted quota fails the test honestly.
+Each scenario has a deadline and bounded follow-up decisions. Executions and resumes are not retried automatically: restarting them can duplicate provider charges. The suite checks a token-spend ceiling before starting each new scenario (150,000 for smoke; 1,000,000 for extended). These are admission limits, not exact provider-call caps; an admitted response can finish beyond them. A model error, incomplete SSE turn, unresolved unexpected question or exhausted quota fails the test honestly. A failed case that leaves a completed clarification turn is cancelled through the normal API, without approving or resuming research.
 
 Reports include execution/conversation IDs, public source evidence, supplier outcome categories and completed reasoning summaries/tool metadata. HTTP headers and credentials are never serialized. Artifacts are redacted and retained for seven days in GitHub. Test conversations stay under the dedicated principal, labeled by CI run and scenario, so failures remain inspectable through the admin activity view. Deployment is not automatically rolled back if the post-deploy agent test fails: inspect the evidence and decide whether a code fix, source outage or configuration change is needed.
 

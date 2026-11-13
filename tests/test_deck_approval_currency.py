@@ -12,8 +12,29 @@ from services.orchestrator.agent import DeckAgent
 from services.orchestrator.app import create_app
 from services.orchestrator.budget import budgets, reference_estimates
 from services.orchestrator.exchange import ExchangeRates, ExchangeUnavailable
+from services.orchestrator.planner import Planner
+from services.orchestrator.research import Research
 from shared.contracts import AgentPlan, CardRequest, Decision, Offer, Source, utcnow
 from tests.test_agent import FakePlanner, collect, execution
+
+
+def test_model_approval_question_enters_review_only_after_identity_validation():
+    research=Research()
+    research.cards['energy-1']={'id':'energy-1','name':'Basic Psychic Energy','localId':'1',
+        'set':{'name':'Synthetic'},'category':'Energy','energyType':'Normal'}
+    card=CardRequest(card_id='energy-1',name='Basic Psychic Energy',set_name='Synthetic',number='1',quantity=60)
+    def plan(**changes):
+        return AgentPlan(is_deck=True,format='standard',cards=[card.model_copy()],
+            question='Do you approve this exact 60-card list for the supplier comparison?',
+            options=['Approve exact list','Request changes before comparison']).model_copy(update=changes)
+    planner=Planner(None,research)
+    resolved=planner.validate(plan())
+    assert resolved.question is None and resolved.options==[] and resolved.cards[0].basic_energy
+    # A full list does not erase unresolved ruleset/printing choices.
+    ambiguous=planner.validate(plan(question='Which ruleset?',options=['International','Japan']))
+    assert ambiguous.question=='Which ruleset?'
+    invalid=plan();invalid.cards[0].name='Invented identity'
+    assert 'could not verify' in planner.validate(invalid).question
 
 
 class DeckPlanner(FakePlanner):

@@ -36,6 +36,23 @@ async def test_harness_never_restarts_a_failed_stream(tmp_path):
     assert json.loads((tmp_path/'failed-report.json').read_text())['status']=='failed'
 
 
+async def test_harness_cancels_an_unexpected_question_without_approving_it(tmp_path):
+    decisions=[]
+    def handler(request):
+        if request.url.path.endswith('/usage'):return httpx.Response(200,json={'total_tokens':0,'in_progress':False,'unverified_usage':False})
+        if request.url.path.endswith('/conversations/chat'):return httpx.Response(200,json={'id':'chat'})
+        if request.url.path.endswith('/resume'):
+            decisions.append(json.loads(request.content))
+            return httpx.Response(200,text=sse([('done',{'status':'cancelled'})]))
+        return httpx.Response(200,text=sse([('execution',{'id':'run','conversation_id':'chat'}),('question',{'kind':'clarification','question':'Approve this deck?','options':['Approve','Revise']}),('done',{'status':'waiting'})]))
+    async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as client:
+        agent=LiveAgentClient('tcg_api_synthetic',client=client,artifact_dir=tmp_path)
+        with pytest.raises(AgentTestFailure,match='Unexpected clarification'):
+            await agent.run(Scenario('failed-question','Build a deck','deck'))
+    assert decisions==[{'action':'cancel'}]
+    assert json.loads((tmp_path/'failed-question-report.json').read_text())['status']=='failed'
+
+
 def test_live_harness_rejects_token_exfiltration_targets_and_scrubs_secrets():
     with pytest.raises(AgentTestFailure,match='only be sent'):
         LiveAgentClient('tcg_api_synthetic',chat_url='https://example.com')

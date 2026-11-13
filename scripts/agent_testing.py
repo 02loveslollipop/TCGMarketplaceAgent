@@ -93,7 +93,7 @@ SMOKE=[
 ]
 EXTENDED=SMOKE+[
  Scenario('gardevoir-deck','Build a sourced 60-card Mega Gardevoir ex International Standard deck. English, Near Mint, any foil. Verify each printing and legality, ask for deck approval, then compare TCGplayer and Cardmarket and prepare the buying budget. Availability failures must not be treated as no stock.','deck',archetype='Mega Gardevoir ex'),
- Scenario('charizard-deck','Build a sourced 60-card Charizard ex International Standard deck. English, Near Mint, any foil. Verify each printing and legality, ask for deck approval, then compare TCGplayer and Cardmarket and prepare the buying budget.','deck',archetype='Charizard ex'),
+ Scenario('charizard-deck','Build a sourced 60-card Mega Charizard X ex International Standard deck. English, Near Mint, any foil. Verify each printing and legality, ask for deck approval, then compare TCGplayer and Cardmarket and prepare the buying budget.','deck',archetype='Mega Charizard X ex'),
  Scenario('gardevoir-collection','I want to make a Gardevoir collection and have a product budget of at most 150000 JPY, excluding unknown delivery/tax. Help me create a budget of cards I could buy. English, Near Mint, one copy of each Gardevoir printing, up to 12 different printings. I prefer full-art or illustration cards, but they do not have to be secret rare. Older cards are welcome; this is not a tournament deck. Research actual candidates, compare TCGplayer and Cardmarket, and select an affordable diverse collection without inventing stock or prices.','collection',budget=150000),
 ]
 
@@ -226,6 +226,12 @@ class LiveAgentClient:
             if execution is None:
                 execution=next((e['data'] for e in events if e['type']=='execution'),None)
                 if execution:report.update(execution)
+            if report['status']=='failed' and execution and events and events[-1]['type']=='done' and events[-1]['data'].get('status')=='waiting':
+                try:
+                    await self.turn('/executions/'+execution['id']+'/resume',{'action':'cancel'},events)
+                    report['cleanup']='Cancelled the failed test question; no research was resumed.'
+                except Exception:
+                    report['cleanup']='Cancellation failed; inspect the recorded execution before starting another test.'
             report['elapsed_seconds']=round(time.monotonic()-started,1)
             report['tool_outcomes']=dict(Counter((e['data'].get('diagnostic') or {}).get('outcome','unspecified') for e in events if e['type']=='tool' and e['data'].get('status')!='loading'))
             # Keep only completed reasoning summaries and public tool metadata.
