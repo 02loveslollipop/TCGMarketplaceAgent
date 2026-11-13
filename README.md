@@ -27,6 +27,8 @@ Open **[TCG Marketplace Chat](https://chat.tcg-marketplace.02labs.me/)** · **[A
 - **Multi-currency budget**: *"Prepare a purchasing budget for a Dragapult ex tournament deck with prices converted to EUR."*
 - **Format legality verification**: *"Check if Mewtwo & Mew-GX is legal in the current Japanese Standard format."*
 
+Completed budgets include **Download Excel**: export card names and codes, Cardmarket and TCGplayer prices in original and converted currencies, clickable product/listing links, supplier totals and dated exchange-rate evidence. See [Excel budget exports](docs/budget-exports.md) for workbook contents and availability limits.
+
 ---
 
 ## Commands and instructions to run and test locally
