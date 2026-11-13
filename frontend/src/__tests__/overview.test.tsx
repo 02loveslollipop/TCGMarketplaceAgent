@@ -26,7 +26,7 @@ it('summarizes active resources and intersects role access with global model ena
   await user.click(screen.getByRole('button',{name:'View model policies'}));
   await user.click(screen.getByRole('button',{name:'Manage role access'}));
   expect(navigate.mock.calls).toEqual([['accounts'],['models'],['roles']]);
-  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(3);
+  expect(vi.mocked(fetch)).toHaveBeenCalledTimes(4);
   expect(vi.mocked(fetch).mock.calls.every(call=>!call[1]?.method||call[1].method==='GET')).toBe(true);
 });
 

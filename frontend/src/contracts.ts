@@ -51,6 +51,7 @@ export interface LegalityStatus {
 }
 
 export interface AdminExecutionSummary {
+  usage?:ExecutionUsage;
   id: string;
   conversation_id: string;
   conversation_title: string;
@@ -68,6 +69,7 @@ export interface AdminThreadExecution {
 }
 
 export interface AdminExecutionDetail {
+  usage?:ExecutionUsage;
   id: string;
   conversation_id: string;
   conversation_title: string;
@@ -83,3 +85,9 @@ export interface AdminExecutionDetail {
   thread_executions?: AdminThreadExecution[];
 }
 
+
+export interface UsageBucket {id:string;name:string;input_tokens:number;output_tokens:number;total_tokens:number;estimated_cost_usd:string|null;priced_tokens:number;unpriced_tokens:number;verified_calls:number;rejected_calls:number;unverified_calls:number}
+export interface PrincipalConsumption extends UsageBucket {active?:boolean;principal_type?:'user'|'api'|'unknown';today_tokens?:number;in_progress?:boolean;unverified_usage?:boolean;current_role_name?:string|null;daily_token_limit?:number|null;quota_known?:boolean}
+export interface ConsumptionReport {start_date:string;end_date:string;timezone:string;today:string;summary:UsageBucket;daily:UsageBucket[];principals:PrincipalConsumption[];roles:UsageBucket[];models:UsageBucket[];active_calls:number;detail_truncated:boolean;notice:string;generated_at:string;metadata_warnings?:string[]}
+export interface ModelPricing {model_id:string;label:string;provider:string;api_id:string;pricing:{currency:string;input_per_million:string;output_per_million:string;source_url?:string|null;note?:string;origin?:string;updated_at?:string;checked_at?:string}|null}
+export interface ExecutionUsage extends UsageBucket {recorded:boolean;model_duration_ms:number|null}

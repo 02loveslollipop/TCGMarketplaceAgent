@@ -21,7 +21,7 @@ function toolTitle(data:{name:string;input?:Record<string,unknown>}) {
     default:return data.name.replaceAll('_',' ');
   }
 }
-export function ThinkingTrace({entries,active}:{entries:ChatEntry[];active:boolean}) {
+export function ThinkingTrace({entries,active,defaultExpanded=false,heading}:{entries:ChatEntry[];active:boolean;defaultExpanded?:boolean;heading?:string}) {
   const items=entries.filter((entry):entry is ChatEntry&(Extract<AgentEvent,{type:'thinking'}>|Extract<AgentEvent,{type:'tool'}>)=>entry.type==='thinking'?Boolean(entry.data.summary?.trim()):entry.type==='tool'&&Boolean(entry.data.name));
   if(!items.length)return null;
   const summaries=items.filter(entry=>entry.type==='thinking');
@@ -31,7 +31,7 @@ export function ThinkingTrace({entries,active}:{entries:ChatEntry[];active:boole
   const label=summaries.length?(active?'Thinking':interrupted?'Thinking interrupted':'Completed thinking'):(active?'Tool activity':interrupted?'Tool activity interrupted':'Completed tool activity');
   const toolErrors=items.filter(entry=>entry.type==='tool'&&entry.data.status==='error').length;
   return <div className="chat-thinking-trace" data-testid="thinking-trace">
-    <ExpandableSection defaultExpanded={false} headerText={<StatusIndicator type={active?'loading':failed?'error':interrupted?'stopped':'info'}>{label}</StatusIndicator>}
+    <ExpandableSection defaultExpanded={defaultExpanded} headerText={<StatusIndicator type={active?'loading':failed?'error':interrupted?'stopped':'info'}>{heading||label}</StatusIndicator>}
       headerDescription={`Reasoning summaries and tool calls${toolErrors?` · ${toolErrors} source ${toolErrors===1?'check':'checks'} could not complete`:''}`}>
       <Steps ariaLabel="Reasoning summaries and tool calls" steps={items.map(entry=>{
         const status=entry.data.status==='error'?'error' as const:entry.data.status==='loading'?(active?'loading' as const:'stopped' as const):entry.type==='thinking'||entry.data.diagnostic&&entry.data.diagnostic.outcome!=='success'?'info' as const:'success' as const;

@@ -98,7 +98,7 @@ it('filters the model collection and provides recovery from zero matches',async(
   expect(screen.getByRole('button',{name:'Edit GPT 6 luna'})).toBeInTheDocument();
 });
 
-it('maps execution statuses consistently for table and modal status indicators and isolates row loading state',async()=>{
+it('maps execution statuses and loads only the selected execution into the trace workspace',async()=>{
   const {AdminActivity, statusIndicatorType} = await import('../AdminActivity');
   expect(statusIndicatorType('complete')).toBe('success');
   expect(statusIndicatorType('running')).toBe('loading');
@@ -122,11 +122,11 @@ it('maps execution statuses consistently for table and modal status indicators a
   const user = userEvent.setup();
   render(<AdminActivity token="admin-token" />);
   await screen.findByText('First Deck');
-  const buttons = screen.getAllByRole('button', {name: /View reasoning & trace/i});
+  const buttons = screen.getAllByRole('button', {name: /View trace for/i});
   expect(buttons).toHaveLength(2);
   await user.click(buttons[0]);
-  expect(buttons[0]).toHaveAttribute('aria-disabled', 'true');
-  expect(buttons[1]).not.toHaveAttribute('aria-disabled', 'true');
+  expect(screen.getByText('Loading execution')).toBeInTheDocument();
+  expect(vi.mocked(fetch).mock.calls.filter(call=>String(call[0]).includes('/activity/exec-'))).toHaveLength(1);
 
   resolveDetail(json({
     id: 'exec-11111111',
@@ -142,7 +142,9 @@ it('maps execution statuses consistently for table and modal status indicators a
     events: [],
     logs: [],
   }));
-  expect(await screen.findByRole('dialog', {name: /Execution Details — First Deck/i})).toBeInTheDocument();
+  expect(await screen.findByRole('region',{name:'Execution transcript'})).toBeInTheDocument();
+  expect(screen.getByRole('heading',{name:'Execution workspace'})).toBeInTheDocument();
+  expect(screen.getByText('Failed during quote step.')).toBeInTheDocument();
 });
 
 it('AdminActivity renders the run selector when thread_executions has 2 or more entries, and clicking another run loads that execution detail', async () => {
@@ -217,13 +219,7 @@ it('AdminActivity renders the run selector when thread_executions has 2 or more 
 
   render(<AdminActivity token="admin-token" />);
 
-  // Switch to Agent Playground view
-  const playgroundButton = await screen.findByRole('button', { name: /Foundry Agentic Playground/i });
-  await user.click(playgroundButton);
-
-  // In the left sidebar thread list, click the conversation thread to select it
-  const threadCard = await screen.findByText('Multi-turn Run');
-  await user.click(threadCard);
+  await user.click(await screen.findByRole('button',{name:'View trace for Multi-turn Run'}));
 
   // Verify run selector is rendered with both runs
   const runSelector = await screen.findByTestId('run-selector');

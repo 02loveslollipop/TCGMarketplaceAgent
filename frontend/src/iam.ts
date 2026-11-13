@@ -21,6 +21,6 @@ export function permits(session:Session|undefined,action:string,resource='*'):bo
   }
   return allowed;
 }
-export const administrationActions=['admin:accounts:read','admin:models:read','admin:activity:read','admin:legality:read','iam:roles:read','iam:principals:read'];
+export const administrationActions=['admin:usage:read','admin:accounts:read','admin:models:read','admin:activity:read','admin:legality:read','iam:roles:read','iam:principals:read'];
 export const canAdmin=(session:Session)=>session.principal_type!=='api'&&administrationActions.some(action=>permits(session,action));
 export const roleLabel=(session:Pick<Session,'role'|'role_name'>)=>session.role_name||(session.role==='admin'?'Administrator':session.role==='user'?'User':session.role);

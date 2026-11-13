@@ -7,3 +7,11 @@
 [hidden] { display: none !important; }
 
 .card-art { display: block; max-width: 100%; height: auto; margin: auto; }
+
+/* Structural layout only; Cloudscape components own colors, spacing and typography. */
+.admin-execution-workspace { display: grid; grid-template-columns: minmax(0, 1fr) minmax(260px, 28%); height: calc(100dvh - 380px); min-height: 500px; }
+.admin-execution-main { display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.admin-execution-tabs { flex: 1; min-height: 0; }
+.admin-execution-details { min-width: 0; overflow: auto; border-inline-start: 1px solid var(--observability-divider); }
+.admin-transcript { height: 100%; box-sizing: border-box; overflow: auto; padding: var(--observability-space); overscroll-behavior: contain; scrollbar-gutter: stable; }
+@media (max-width: 900px) { .admin-execution-workspace { grid-template-columns: minmax(0, 1fr); height: auto; } .admin-execution-main { height: 600px; } .admin-execution-details { border-inline-start: 0; border-block-start: 1px solid var(--observability-divider); max-height: 420px; } }

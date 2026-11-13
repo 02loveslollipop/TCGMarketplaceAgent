@@ -4,6 +4,7 @@ import {api} from './client';
 import type {AdminSection} from './Admin';
 import type {Model,Session} from './contracts';
 import {permits} from './iam';
+import {Consumption} from './Consumption';
 
 interface Account {id:string;username:string;role:string;role_name?:string;administrative_access?:boolean;active:boolean}
 interface RolePolicy {role:string;builtin_key?:string|null;role_name?:string;daily_token_limit:number;allowed_model_ids:string[]|null;reset_timezone:string}
@@ -42,17 +43,18 @@ export function Overview({token,onNavigate,session}:{token:string;session?:Sessi
   const canAssess=!!accounts.data&&!!models.data&&!!policies.data;
   return <SpaceBetween size="l">
     <Header variant="h1" description="Monitor workspace access, model availability, and daily allowances." actions={<Button iconName="refresh" loading={loading} onClick={()=>setRevision(value=>value+1)}>Refresh</Button>}>Overview</Header>
+    <Consumption compact refreshKey={revision} token={token} session={session} onExplore={()=>onNavigate?.('consumption')}/>
     <Container header={<Header variant="h2" description={updated?`Last refreshed ${updated.toLocaleTimeString()}.`:'Current workspace configuration.'}>Workspace overview</Header>}>
       <ColumnLayout columns={4} variant="text-grid">
         <SpaceBetween size="xs"><Box color="text-body-secondary">Active accounts</Box><div data-testid="overview-active-accounts">{count(activeAccounts?.length,accounts.loading)}</div><Box color="text-body-secondary">{accounts.data?`${accounts.data.length} total accounts`:'Accounts with workspace access.'}</Box>{permits(session,'admin:accounts:read')&&<Button variant="inline-link" onClick={()=>onNavigate?.('accounts')}>View accounts</Button>}</SpaceBetween>
         <SpaceBetween size="xs"><Box color="text-body-secondary">Enabled models</Box><div data-testid="overview-enabled-models">{count(enabled?.length,models.loading)}</div><Box color="text-body-secondary">{models.data?`${models.data.length} registered model policies`:'Models enabled globally for chat.'}</Box>{permits(session,'admin:models:read')&&<Button variant="inline-link" onClick={()=>onNavigate?.('models')}>View model policies</Button>}</SpaceBetween>
         <SpaceBetween size="xs"><Box color="text-body-secondary">Roles with chat access</Box><div data-testid="overview-usable-roles">{count(usableRoles?.length,policies.loading||models.loading)}</div><Box color="text-body-secondary">A positive quota and an enabled model.</Box>{permits(session,'iam:roles:read')&&<Button variant="inline-link" onClick={()=>onNavigate?.('roles')}>Manage role access</Button>}</SpaceBetween>
-        <SpaceBetween size="xs"><Box color="text-body-secondary">Activity & Legality</Box><div data-testid="overview-activity-link"><Box fontSize="display-l" fontWeight="bold">Audit</Box></div><Box color="text-body-secondary">Execution traces & legality sync.</Box>{permits(session,'admin:activity:read')&&<Button variant="inline-link" onClick={()=>onNavigate?.('activity')}>View activity logs</Button>}</SpaceBetween>
+        <SpaceBetween size="xs"><Box color="text-body-secondary">Activity and legality</Box><div data-testid="overview-activity-link"><Box fontSize="display-l" fontWeight="bold">Audit</Box></div><Box color="text-body-secondary">Execution traces and legality sync.</Box>{permits(session,'admin:activity:read')&&<Button variant="inline-link" onClick={()=>onNavigate?.('activity')}>View activity logs</Button>}</SpaceBetween>
       </ColumnLayout>
     </Container>
     <Grid gridDefinition={[{colspan:{default:12,s:8}},{colspan:{default:12,s:4}}]}>
       <Table wrapLines ariaLabels={{tableLabel:'Model availability by provider'}} variant="container" loading={models.loading} loadingText="Loading model availability" items={providers} trackBy="provider" header={<Header variant="h2" description="Enabled / registered models by provider. Unverified counts apply to enabled models.">Model availability</Header>} empty={models.error?failure(models,'Model policies'):<Box textAlign="center" padding="m">No model policies. Add a model policy to configure chat.</Box>} columnDefinitions={[
-        {id:'provider',header:'Provider',cell:row=>providerName(row.provider)},
+        {id:'provider',header:'Provider',isRowHeader:true,cell:row=>providerName(row.provider)},
         {id:'enabled',header:'Enabled',cell:row=><StatusIndicator type={row.models.some(model=>model.enabled)?'success':'stopped'}>{row.models.filter(model=>model.enabled).length} / {row.models.length}</StatusIndicator>},
         {id:'verification',header:'Unverified',cell:row=>{const missing=row.models.filter(model=>model.enabled&&!model.verified_at).length;return <StatusIndicator type={missing?'warning':'info'}>{missing}</StatusIndicator>;}}
       ]}/>
