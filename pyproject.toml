@@ -24,5 +24,6 @@ include = ["services*", "shared*", "scripts*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+markers = ["live_agent: explicit opt-in tests using live services and paid model calls"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

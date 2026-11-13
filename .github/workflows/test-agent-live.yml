@@ -1,0 +1,59 @@
+name: Test live agent
+on:
+  workflow_call:
+    inputs:
+      suite:
+        type: string
+        default: smoke
+      model:
+        type: string
+        default: gpt-6-luna
+      max_tokens:
+        type: number
+        default: 150000
+    secrets:
+      GH_ACTIONS_TCG_API_TOKEN:
+        required: true
+permissions:
+  contents: read
+jobs:
+  pytest-agent:
+    runs-on: ubuntu-latest
+    timeout-minutes: ${{ inputs.suite == 'extended' && 60 || 30 }}
+    environment: testing
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - name: Install live test dependencies
+        run: python -m pip install 'pytest>=8,<10' 'pytest-asyncio>=0.25,<2' 'httpx>=0.28,<1'
+      - name: Validate dedicated testing credential
+        env:
+          TCG_CI_API_TOKEN: ${{ secrets.GH_ACTIONS_TCG_API_TOKEN }}
+        run: |
+          python - <<'PY'
+          import os
+          if not os.getenv('TCG_CI_API_TOKEN','').startswith('tcg_api_'):
+              raise SystemExit('Set testing environment secret GH_ACTIONS_TCG_API_TOKEN to the dedicated CI principal credential.')
+          PY
+      - name: Run sequential live-agent pytest scenarios
+        env:
+          TCG_CI_API_TOKEN: ${{ secrets.GH_ACTIONS_TCG_API_TOKEN }}
+          TCG_LIVE_TESTS: '1'
+          TCG_LIVE_SUITE: ${{ inputs.suite }}
+          TCG_TEST_MODEL: ${{ inputs.model }}
+          TCG_TEST_MAX_TOKENS: ${{ inputs.max_tokens }}
+          TCG_TEST_ARTIFACTS: .runtime/live-agent-tests
+        run: python -m pytest tests/live --confcutdir=tests/live -q --tb=short --junitxml=.runtime/live-agent-tests/junit.xml
+      - name: Upload scenario reports and public evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-agent-${{ inputs.suite }}-${{ github.run_id }}
+          path: .runtime/live-agent-tests/
+          if-no-files-found: ignore
+          retention-days: 7

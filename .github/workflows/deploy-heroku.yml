@@ -60,3 +60,13 @@ jobs:
             curl --fail --silent --show-error --retry 15 --retry-all-errors --retry-delay 2 "${web_url%/}/health"
             echo
           done
+  test-agent:
+    needs: [deploy-heroku]
+    if: github.ref == 'refs/heads/main'
+    uses: ./.github/workflows/test-agent-live.yml
+    with:
+      suite: smoke
+      model: gpt-6-luna
+      max_tokens: 150000
+    secrets:
+      GH_ACTIONS_TCG_API_TOKEN: ${{ secrets.GH_ACTIONS_TCG_API_TOKEN }}
