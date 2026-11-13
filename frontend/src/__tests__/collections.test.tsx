@@ -27,3 +27,13 @@ it('uses collection language in previews and card lists while leaving deck label
  expect(screen.getByRole('heading',{name:/Collection cards/})).toBeInTheDocument();
  expect(screen.getByText('Collectible printings · tournament legality not required')).toBeInTheDocument();
 });
+it('distinguishes unverified seller availability from missing price quotations',()=>{
+ const missing={...card,covered:0,reason:'Availability unverified'};
+ const preview=render(<ArtifactPreview artifact={{id:'stock-unknown',kind:'budget',result:{...result,missing:[missing],availability_unverified:[missing]}}} onOpen={()=>{}}/>);
+ expect(screen.getByText(/1 card with unverified seller availability/)).toBeInTheDocument();
+ expect(screen.queryByText(/without quotations/)).not.toBeInTheDocument();
+ preview.unmount();
+ render(<ArtifactPreview artifact={{id:'stock-shortfall',kind:'budget',result:{...result,missing:[missing],stock_shortages:[missing]}}} onOpen={()=>{}}/>);
+ expect(screen.getByText(/1 card with confirmed listing shortfalls/)).toBeInTheDocument();
+ expect(screen.queryByText(/unverified seller availability/)).not.toBeInTheDocument();
+});
