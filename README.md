@@ -22,6 +22,7 @@ Open **[TCG Marketplace Chat](https://chat.tcg-marketplace.02labs.me/)** · **[A
 ### Example prompts to try
 
 - **Deck search & budgeting**: *"I need to buy the cards for an M Lucario deck. Check two suppliers and prepare a budget in USD."*
+- **Collection curation**: *"I want a Gardevoir collection with a product budget of 150000 JPY. English, Near Mint, one per printing. Prefer full-art cards, including non-secret full arts; older cards are welcome. Research candidates and prepare a buying estimate."*
 - **Specific card singles**: *"I need 4 copies of Professor's Research, 2 Boss's Orders, and 4 Ultra Ball for the current Standard format in Near Mint condition."*
 - **Multi-currency budget**: *"Prepare a purchasing budget for a Dragapult ex tournament deck with prices converted to EUR."*
 - **Format legality verification**: *"Check if Mewtwo & Mew-GX is legal in the current Japanese Standard format."*
@@ -119,13 +120,13 @@ LOCAL_DEV_PASSWORD_ONLY=true docker compose up -d --build auth
 
 ### 4. Running the test suite
 
-Execute the full backend test suite (179 unit, integration, and regression tests):
+Execute the backend unit, integration, and regression suite (paid live tests are opt-in):
 
 ```bash
 .venv/bin/pytest -q
 ```
 
-Execute the frontend test suite (77 tests across Cloudscape chat, admin, and authentication flows):
+Execute the frontend suite across Cloudscape chat, collections, admin, and authentication flows:
 
 ```bash
 npm --prefix frontend test
@@ -136,6 +137,8 @@ Build the production frontend bundle:
 ```bash
 npm --prefix frontend run build
 ```
+
+Live post-deployment pytest scenarios and the manual research suite are documented in [Agent evaluations and CI](docs/ci/agent-evaluations.md). The Heroku workflow runs smoke tests only after all services deploy successfully.
 
 ### 5. Updating the dated legality catalog
 
@@ -153,8 +156,10 @@ The orchestrator executes a multi-step LangGraph workflow with deterministic sta
 
 ```mermaid
 flowchart TD
-    Start(["Start request"]) --> Router["router: deck or specified cards"]
+    Start(["Start request"]) --> Router["router: deck, collection or specified cards"]
     Router -- "Build or revise deck" --> Builder["deck_builder: sourced deck research"]
+    Router -- "Build a collection" --> Collector["collection_builder: researched printings"]
+    Collector --> Question
     Router -- "Specified cards" --> Understand["understand: resolve card identities"]
     Builder --> Question{"Needs clarification?"}
     Understand --> Question
@@ -162,13 +167,16 @@ flowchart TD
     Clarify -- "Answer" --> Router
     Clarify -- "Cancel" --> Cancel(["Cancelled"])
     Question -- "No" --> Validate["validate: identity and format legality"]
-    Validate --> Deck{"Deck or 60-card list?"}
+    Validate --> Deck{"Deck or non-collection 60-card list?"}
     Deck -- "Yes" --> Review["review: approve deck"]
     Review -- "Revise" --> Router
     Review -- "Cancel" --> Cancel
     Review -- "Approve" --> Baseline["card_search: baseline price guides"]
     Deck -- "No" --> Baseline
-    Baseline --> Quote["quote: seller stock and product links"]
+    Baseline --> Collection{"Collection request?"}
+    Collection -- "Yes" --> Select["collection_budget: FX and spending-cap selection"]
+    Select --> Quote["quote: selected-card stock and product links"]
+    Collection -- "No" --> Quote
     Quote --> Missing["missing: allocate stock and classify evidence"]
     Missing --> Shortfall{"Verified listing shortfall?"}
     Shortfall -- "Yes" --> Decide["decide: alternatives or retain shortfall"]
@@ -179,20 +187,21 @@ flowchart TD
     Finish --> Done(["Budget and estimates"])
 ```
 
-Text equivalent: route the request to deck construction or specified-card research; clarify and validate it; obtain deck approval when applicable; retrieve baseline prices; separately check stock and product links; ask about alternatives only for verified listing shortfalls; return the buying budget with source evidence and optional currency conversion. Follow-ups resume the same execution.
+Text equivalent: route to playable-deck construction, collectible-collection research or specified-card resolution; clarify and verify identities; check tournament legality and request approval only for playable decks; retrieve baseline prices; select a collection within its product budget using verified exchange rates; check seller stock separately; ask about substitutes only for verified shortfalls; return sourced budgets and explicit limitations. Follow-ups resume the same execution.
 
 ### Graph node responsibilities
 
-1. **`router`**: Uses a structured model response to select deck construction/revision or research of already specified cards.
-2. **`deck_builder` / `understand`**: Share bounded tool-augmented research for verified card identities, sourced deck lists, user preferences and dated legality evidence. Deck construction must resolve 60 cards before pricing and does not use stock to silently change the deck.
+1. **`router`**: Uses a structured response to choose deck construction/revision, collection research or specified-card resolution.
+2. **`deck_builder` / `collection_builder` / `understand`**: Share bounded tool-augmented research for verified card identities, sourced deck lists, user preferences and dated legality evidence. Deck construction must resolve 60 cards before pricing. Collections research distinct collectible printings and a product budget, including older non-tournament cards. Research context omits repeated pricing, image and HTML payloads; complete evidence and streamed summaries/tool calls remain available.
 3. **`clarify`**: Persists an interruption with selectable answers when a format, ruleset or card preference materially changes the result; the answer returns through routing.
-4. **`validate`**: Checks card identity and applicable International/Japan Standard/Expanded legality against the dated catalog and metadata.
+4. **`validate`**: Checks every card identity and applicable International/Japan Standard/Expanded legality. Collections retain identity checks but do not require tournament eligibility.
 5. **`review`**: Requires explicit deck approval before pricing. Requested revisions return through routing and require a new approval.
 6. **`card_search`**: Retrieves TCGplayer and Cardmarket price-guide references through TCGdex, without inventory assumptions. Market/trend values are preferred to individual low-price references when available.
-7. **`quote`**: Independently checks seller listings through the configured Apify adapters, retaining exact variants, stock, product links and source diagnostics. The current testing configuration disables live scraping; baseline pricing still runs.
-8. **`missing`**: Allocates actual seller inventory once across requested variants, and distinguishes verified listing shortfalls from unverified availability. Empty, disabled, blocked or failed retrieval never proves no stock.
-9. **`decide`**: Asks for explicit substitute research, retention of the listed shortfall, or cancellation. Follow-ups remain in the same saved execution.
-10. **`finish`**: Returns supplier budgets, separate reference estimates, limitations and source links; optionally converts display currency. Unknown shipping and unverified stock never become a confirmed purchase total.
+7. **`collection_budget`**: For collections only, ranks the researched candidates using the catalog art preference and selects affordable printings from verified price guides with dated FX. It enforces the requested product-subtotal cap, never invents a missing price or exchange rate, and lists excluded candidates. Unknown shipping/taxes are outside the cap and remain explicit.
+8. **`quote`**: Independently checks seller listings through the configured Apify adapters, retaining exact variants, stock, product links and source diagnostics. The current testing configuration disables live scraping; baseline pricing still runs.
+9. **`missing`**: Allocates actual seller inventory once across requested variants, and distinguishes verified listing shortfalls from unverified availability. Empty, disabled, blocked or failed retrieval never proves no stock.
+10. **`decide`**: Asks for explicit substitute research, retention of the listed shortfall, or cancellation. Follow-ups remain in the same saved execution.
+11. **`finish`**: Returns supplier budgets, separate reference estimates, limitations and source links; optionally converts display currency. Unknown shipping and unverified stock never become a confirmed purchase total.
 
 ---
 
@@ -225,6 +234,7 @@ The DuckDuckGo MCP server runs as a separate stateless service (`services.ddg_mc
 - Guarded by a shared bearer token (`MCP_AUTH_TOKEN`).
 - Implements strict Server-Side Request Forgery (SSRF) protection (`public_https`), refusing private subnets, localhost, and non-443 ports.
 - Provides zero-cost web exploration without relying on proprietary search APIs.
+- Uses ordinary HTTPX retrieval only; blocked access is reported without browser/TLS impersonation retries. Marketplace planning lookups are deferred to the dedicated supplier stage.
 
 ---
 
@@ -251,7 +261,7 @@ flowchart LR
     end
 
     subgraph StorageLayer["Persistence (PostgreSQL 16)"]
-        DB[(PostgreSQL Database<br/>Schema: pokemon_tcg_poc<br/>• accounts & authenticators<br/>• role_policies & daily_token_usage<br/>• graph_checkpoints & audit_logs<br/>• legality_sets & legality_bans)]
+        DB[(PostgreSQL Database<br/>Schema: pokemon_tcg_poc<br/>• accounts & authenticators<br/>• iam_roles, api_principals & api_tokens<br/>• daily_token_usage<br/>• graph_checkpoints & audit_logs<br/>• legality_sets & legality_bans)]
     end
 
     subgraph ExternalServices["External APIs & Suppliers"]
@@ -297,9 +307,9 @@ flowchart LR
 
 ### Key architectural highlights
 
-1. **Strict Schema Isolation**: The application connects to a shared PostgreSQL cluster but operates solely within the `pokemon_tcg_poc` schema. Three restricted database roles (`app_auth`, `app_admin`, `app_orchestrator`) hold explicit, minimal permissions. Cross-schema access is blocked.
+1. **Strict Schema Isolation**: The application connects to a shared PostgreSQL cluster but operates solely within the `pokemon_tcg_poc` schema. Three restricted database roles (`pokemon_poc_auth`, `pokemon_poc_admin`, `pokemon_poc_orchestrator`) hold explicit, minimal permissions. Cross-schema access is blocked.
 2. **Enterprise Authentication & 2FA**: Passwords are saved with Argon2id hashes. Second-factor authentication is mandatory via TOTP or FIDO2/WebAuthn passkeys. Sessions use asymmetric RS256 JWTs with a strict sliding-session cap (`MAX_SESSION_HOURS`) and seamless cross-portal session restoration via `SameSite=Strict`, `HttpOnly` cookies.
-3. **Token Accounting & Quotas**: Real-time token usage is tracked per account across all LangChain/LLM calls. Daily token allowances (e.g. 50,000 for Users, 200,000 for Admins) reset at midnight JST, preventing runaway API expenditures.
+3. **Token Accounting & Quotas**: Provider-reported input/output usage is tracked independently for each human account and API principal. All of a principal’s credentials share its counter. Hierarchical role quotas reset at midnight Japan time; an admitted response may finish beyond the balance. Quotas limit expenditure and do not guarantee prompt-injection prevention.
 4. **Resilient Human-in-the-Loop Orchestration**: State checkpoints are stored in `pokemon_tcg_poc.graph_checkpoints`. The agent pauses when asking questions or presenting deck reviews, freeing resources until the user submits a decision.
 5. **Native Cloudscape UX**: Both the Chat Portal and Admin Portal are crafted with AWS's Cloudscape Design System, providing responsive data tables, modal review panels, reasoning disclosure traces, and dark/light mode theming.
 
