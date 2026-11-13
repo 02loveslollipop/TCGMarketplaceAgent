@@ -51,4 +51,6 @@ Endpoints: `GET /api/admin/consumption`, `GET /api/admin/model-pricing`, `PUT /a
 
 Tests cover immutable role/rate snapshots, historical residuals, midnight attribution, duplicate completion, missing usage, model identity changes, permissions, current quota enrichment, PostgreSQL JSON queries, UI drill-downs, pricing forms and execution ownership. Browser checks cover desktop/mobile layouts and Light, Dark and Dark blue themes. Preview screenshots are labelled synthetic data; the application reads persisted backend data.
 
-This iteration is local. For release, deploy the additive backend before the frontend so reports exist when navigation appears. Deployment and post-deployment smoke workflows remain unchanged.
+Released on **13 November 2026** from `a5e3105`: [Heroku deployment and live smoke tests](https://github.com/02loveslollipop/TCGMarketplaceAgent/actions/runs/43434180323) completed before the [Cloudflare Pages deployment](https://github.com/02loveslollipop/TCGMarketplaceAgent/actions/runs/43435151595). Both live agent scenarios passed, and their eight model calls produced historical-role and pricing snapshots with matching Decimal estimates. Earlier daily totals remain unpriced and unattributed.
+
+For future releases, deploy the additive backend before the frontend so reports exist when navigation appears. Deployment and post-deployment smoke workflows remain unchanged.
