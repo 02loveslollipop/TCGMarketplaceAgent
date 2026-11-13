@@ -19,11 +19,12 @@ export function Sources({sources}:{sources:Source[]}) {
 export function CardResults({cards,legality,sources=[]}:{cards:Card[];legality:Legality;sources?:Source[]}) {
   const [view,setView]=useState('cards'),[filter,setFilter]=useState('');
   const filtered=cards.filter(card=>[card.name,card.set_name,card.number,card.condition,card.language,card.printing].join(' ').toLowerCase().includes(filter.toLowerCase()));
-  const header=<Header variant="h3" counter={`(${cards.reduce((sum,card)=>sum+card.quantity,0)} cards)`} description={`${cards.length} requested printings. Quantities and variant preferences are preserved.`} actions={<SegmentedControl label="Deck view" selectedId={view} onChange={({detail})=>setView(detail.selectedId)} options={[{id:'cards',text:'Cards'},{id:'table',text:'Table'}]}/>}>Deck list</Header>;
+  const collection=legality.applicable===false;
+  const header=<Header variant="h3" counter={`(${cards.reduce((sum,card)=>sum+card.quantity,0)} cards)`} description={`${cards.length} requested printings. Quantities and variant preferences are preserved.`} actions={<SegmentedControl label={collection?'Collection view':'Deck view'} selectedId={view} onChange={({detail})=>setView(detail.selectedId)} options={[{id:'cards',text:'Cards'},{id:'table',text:'Table'}]}/>}>{collection?'Collection cards':'Deck list'}</Header>;
   const search=<TextFilter filteringText={filter} filteringAriaLabel="Find cards in deck" filteringPlaceholder="Find cards, sets or variants" countText={`${filtered.length} printings`} onChange={({detail})=>{setFilter(detail.filteringText);}}/>;
   const empty=<Box textAlign="center" padding="l"><SpaceBetween size="s"><Box fontWeight="bold">{filter?'No matching cards':'No cards in this result'}</Box>{filter&&<Button onClick={()=>{setFilter('');}}>Clear card filter</Button>}</SpaceBetween></Box>;
   return <SpaceBetween size="m">
-    <StatusIndicator type={legality.status==='verified'?'success':'warning'}>Format legality: {legality.status}</StatusIndicator>
+    <StatusIndicator type={collection?'info':legality.status==='verified'?'success':'warning'}>{collection?'Collectible printings · tournament legality not required':`Format legality: ${legality.status}`}</StatusIndicator>
     {legality.issues.map((issue,index)=><Alert key={index} type="warning">{issue}</Alert>)}
     {view==='cards'?<Cards data-testid="card-results" header={header} filter={search} empty={empty} cardDefinition={{
       header:item=><Header variant="h3">{item.name}</Header>,
@@ -42,6 +43,7 @@ export function CardResults({cards,legality,sources=[]}:{cards:Card[];legality:L
 export function BudgetResults({result}:{result:Result}) {
   const [priceView,setPriceView]=useState('converted');
   const conversion=result.currency_conversion;
+  const collection=result.collection_summary;
   const original=priceView==='original';
   const purchasingBudgets=result.budgets.filter(budget=>!result.reference_estimates?.length||budget.complete||budget.lines.some(line=>line.covered>0));
   const estimates=result.reference_estimates||[];
@@ -54,7 +56,14 @@ export function BudgetResults({result}:{result:Result}) {
         <ExchangeRateDetails conversion={conversion}/>
       </SpaceBetween>
     </Container>
-    {estimates.length>0&&<Container header={<Header variant="h3" description="Indicative card costs from price guides. Stock, condition, and language are unverified. Shipping, taxes, and fees are excluded.">Estimated deck cost</Header>}>
+    {collection&&<Container header={<Header variant="h3" description="A selection from the researched candidate pool. This product budget excludes unknown delivery, taxes and fees.">Collection budget</Header>}><SpaceBetween size="m">
+      <KeyValuePairs columns={3} items={[{label:'Product budget',value:`${collection.budget_amount} ${collection.currency}`},{label:'Selected collection estimate',value:collection.product_subtotal===null?'Unavailable':`${collection.product_subtotal} ${collection.currency}`},{label:'Remaining product budget',value:collection.remaining_budget===null?'Unknown':`${collection.remaining_budget} ${collection.currency}`},{label:'Selected printings',value:`${collection.selected_printings} of ${collection.researched_candidates} researched candidates`},{label:'Catalog art preference matches',value:collection.preferred_selected},{label:'Confirmed purchase total',value:'Unavailable'}]}/>
+      {collection.limitations.map((text,index)=><Box key={index} color="text-body-secondary">{text}</Box>)}
+      <ExchangeRateDetails conversion={collection.exchange}/>
+      <Table items={collection.lines} empty={<Box>No affordable collection could be established from verified, convertible price references.</Box>} columnDefinitions={[{id:'card',header:'Selected printing',isRowHeader:true,cell:line=><SpaceBetween size="xxs"><Box>{line.name}</Box><Box color="text-body-secondary">{line.set_name} · #{line.number}</Box></SpaceBetween>},{id:'supplier',header:'Price-guide source',cell:line=>line.supplier},{id:'cost',header:'Estimated product cost',cell:line=><Price amount={line.original_line_total} currency={line.original_currency} converted={line.converted_line_total} conversion={{status:'available',target_currency:collection.currency}}/>},{id:'source',header:'Evidence',cell:line=><Link external href={safeHref(line.source.url)}>{line.source.title}</Link>}]}/>
+      <ExpandableSection headerText={`Other researched candidates (${collection.excluded_candidates.length})`}><Table items={collection.excluded_candidates} columnDefinitions={[{id:'card',header:'Printing',isRowHeader:true,cell:line=>line.name},{id:'reason',header:'Selection limitation',cell:line=>line.reason}]}/></ExpandableSection>
+    </SpaceBetween></Container>}
+    {estimates.length>0&&<Container header={<Header variant="h3" description="Indicative card costs from price guides. Stock, condition, and language are unverified. Shipping, taxes, and fees are excluded.">{collection?'Supplier estimates for selected collection':'Estimated deck cost'}</Header>}>
       <ColumnLayout columns={2} variant="text-grid">{estimates.map(estimate=><SpaceBetween key={`${estimate.supplier}-${estimate.currency}`} size="m">
         <Header variant="h3">{estimate.supplier}</Header>
         <KeyValuePairs items={[
@@ -70,7 +79,7 @@ export function BudgetResults({result}:{result:Result}) {
         ]}/></ExpandableSection>
       </SpaceBetween>)}</ColumnLayout>
     </Container>}
-    <StatusIndicator type={result.legality.status==='verified'?'success':'warning'}>Format legality: {result.legality.status}</StatusIndicator>
+    <StatusIndicator type={collection?'info':result.legality.status==='verified'?'success':'warning'}>{collection?'Collectible printings · tournament legality not required':`Format legality: ${result.legality.status}`}</StatusIndicator>
     {result.legality.issues.map((issue,index)=><Alert key={index} type="warning">{issue}</Alert>)}
     {result.supplier_errors.map((error,index)=><Alert key={index} type="warning" header={error.supplier}>{error.message}</Alert>)}
     {!result.availability_unverified&&!result.stock_shortages&&result.missing.length>0&&<Alert type="warning" header="Missing quotations"><SpaceBetween size="xs">{result.missing.map((card,index)=><div key={`${card.card_id}-${index}`}>{card.quantity} × {card.name} · {variantDetails(card)}</div>)}</SpaceBetween></Alert>}
@@ -104,7 +113,7 @@ export function BudgetResults({result}:{result:Result}) {
           </SpaceBetween>
         </ExpandableSection>)}
       </SpaceBetween>},
-      {id:'deck',label:'Deck',content:<SpaceBetween size="m"><div className="chat-message-text"><Markdown text={result.plan.explanation}/></div><CardResults cards={result.plan.cards} legality={result.legality} sources={result.plan.sources}/></SpaceBetween>},
+      {id:'deck',label:collection?'Collection':'Deck',content:<SpaceBetween size="m"><div className="chat-message-text"><Markdown text={result.plan.explanation}/></div><CardResults cards={result.plan.cards} legality={result.legality} sources={result.plan.sources}/></SpaceBetween>},
       {id:'offers',label:`Offers (${result.offers.length})`,content:<Table data-testid="offers-table" header={<Header variant="h3" counter={`(${result.offers.length})`}>Retrieved prices</Header>} items={result.offers} empty={<Box textAlign="center" padding="l">No quotations or price references were retrieved.</Box>} columnDefinitions={[
         {id:'name',header:'Card',cell:offer=>offer.name},{id:'supplier',header:'Supplier',cell:offer=>offer.supplier},
         {id:'price',header:'Unit price',cell:offer=><SpaceBetween size="xxs">{money(offer.price,offer.currency,offer.converted_price)}<Box color="text-body-secondary">{offer.price_kind==='reference'?'Price-guide reference':'Seller listing'}</Box></SpaceBetween>},

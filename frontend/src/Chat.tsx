@@ -59,8 +59,8 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     if(event.type==='execution'){setExecution(event.data.id);setConversation(event.data.conversation_id);}
     if(event.type==='question'){setQuestion(event.data);setAnnouncement('The agent needs your input. Review the decision above the composer.');}
     if(event.type==='error')setError(event.data.message);
-    if(event.type==='cards')setAnnouncement('Deck preview ready. Review the resolved printings and sources.');
-    if(event.type==='result')setAnnouncement('Deck and budget ready. Open the preview to review quotations and sources.');
+    if(event.type==='cards')setAnnouncement(event.data.legality.applicable===false?'Collection candidates ready. Review the researched printings and sources.':'Deck preview ready. Review the resolved printings and sources.');
+    if(event.type==='result')setAnnouncement(event.data.collection_summary?'Collection and budget ready. Open the preview to review the selected printings and spending allowance.':'Deck and budget ready. Open the preview to review quotations and sources.');
     append(event);
   }
   async function run(path:string,body:unknown,restoreQuestion:Question|null=null){
