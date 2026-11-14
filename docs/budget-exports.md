@@ -2,6 +2,8 @@
 
 Select **Download Excel** in the buying-budget header for a completed deck, singles or collection result. The same action is available when opening a saved budget or reviewing it in the administration activity workspace. The current converted/original price-view toggle does not hide either currency in the export.
 
+The price-guide preview keeps both supplier subtotals and coverage visible together. Select Cardmarket or TCGplayer to view its card details in a full-width table. Rows retain quantities, printing codes, source links and separately labelled line/per-card estimates. Search filters the selected supplier without pagination. Long converted unit amounts are rounded to four decimal places for display; the saved values and Excel export retain their original precision.
+
 The workbook contains three sheets:
 
 - **Cards**: card name, set and card number, catalog ID, requested and priced quantities, requested variant, supplier, original unit/line prices, converted unit/line estimates, the recorded exchange rate and date, clickable product/listing pages, price-evidence links, retrieval dates and availability. Cardmarket and TCGplayer remain separate rows. Missing supplier prices remain blank, labelled unavailable.
