@@ -6,8 +6,8 @@ import {createPortal} from 'react-dom';
 import ChatBubble from '@cloudscape-design/chat-components/chat-bubble';
 import Avatar from '@cloudscape-design/chat-components/avatar';
 import SupportPromptGroup from '@cloudscape-design/chat-components/support-prompt-group';
-import {api,stream} from './client';
-import type {AgentEvent,Conversation,Decision,Model,Question,ImageContext} from './contracts';
+import {ApiError,api,stream,useClientTransport,type AuthMode} from './client';
+import type {AgentEvent,Conversation,DailyUsage,Decision,Model,Question,ImageContext,Session} from './contracts';
 import {DecisionPanel} from './DecisionPanel';
 import {ArtifactContent,ArtifactPreview,artifactTitle,type ChatArtifact} from './ChatArtifacts';
 import './chat.css';
@@ -15,9 +15,28 @@ import {ImageAttachments,SentImages,readImage,MAX_IMAGES} from './ChatImages';
 import {ThinkingTrace} from './ThinkingTrace';
 import {decisionText,type ChatEntry,type ChatEvent} from './ChatActivity';
 import {Markdown} from './Markdown';
+import {permits} from './iam';
 import {settingsInputAttributes} from './inputSemantics';
 
-interface DailyUsage {daily_token_limit:number;total_tokens:number;remaining_tokens:number;unverified_usage:boolean;in_progress:boolean}
+export interface ExecutionDebugInfo {
+  conversationId?: string;
+  executionId: string;
+  status: 'idle' | 'streaming' | 'waiting' | 'stopped_local' | 'incomplete' | 'error' | 'complete';
+  lastEventType?: string;
+}
+
+export interface ChatProps {
+  token: string;
+  onPreview?: (artifact: ChatArtifact | null) => void;
+  navigationContainer?: HTMLElement | null;
+  onConversationSelected?: () => void;
+  authMode?: AuthMode;
+  onUnauthorized?: (error: ApiError) => void;
+  session?: Session | null;
+  onUsageChange?: (usage: DailyUsage | null, usageError: string) => void;
+  onExecutionStateChange?: (info: ExecutionDebugInfo) => void;
+}
+
 interface HistoryRow {role:string;created_at?:string;content:{images?:ImageContext[];text?:string;type?:AgentEvent['type'];data?:unknown;execution_id?:string;decision?:Decision}}
 const starters=[
   {id:'deck',label:'Build an M Lucario deck',text:'Help me find an M Lucario deck for Expanded. Use English, near-mint cards and compare supplier prices.'},
@@ -26,51 +45,142 @@ const starters=[
 ];
 const agentAvatar=(loading=false)=><Avatar color="gen-ai" iconName="gen-ai" loading={loading} ariaLabel="Deck agent, generative AI assistant" tooltipText="Deck agent"/>;
 
-export function Chat({token,onPreview,navigationContainer,onConversationSelected}:{token:string;onPreview?:(artifact:ChatArtifact|null)=>void;navigationContainer?:HTMLElement|null;onConversationSelected?:()=>void}) {
+export function Chat({token,onPreview,navigationContainer,onConversationSelected,authMode,onUnauthorized,session,onUsageChange,onExecutionStateChange}:ChatProps) {
+  const transport=useClientTransport();
+  const effectiveAuthMode=authMode??transport.authMode;
+  const effectiveOnUnauthorized=onUnauthorized??transport.onUnauthorized;
+  const authOptions=effectiveAuthMode==='api-token'?{authMode:effectiveAuthMode,onUnauthorized:effectiveOnUnauthorized}:undefined;
+  const isApiTokenMode=effectiveAuthMode==='api-token';
+  const canReadUsage=!session||permits(session,'agent:usage:read');
+  const canReadConversations=!session||permits(session,'agent:conversations:read');
+  const canListModels=!session||permits(session,'agent:models:list');
+  const canCreateExecution=!session||permits(session,'agent:executions:create');
+  const canRenameConversation=(id:string)=>!session||permits(session,'agent:conversations:write',`conversation:${id}`);
+  const canDeleteConversation=(id:string)=>!session||permits(session,'agent:conversations:delete',`conversation:${id}`);
+  const canReadExecution=(id:string)=>!id||!session||permits(session,'agent:executions:read',`execution:${id}`);
+  const canResumeExecution=(id:string)=>!id||!session||permits(session,'agent:executions:resume',`execution:${id}`);
   const [images,setImages]=useState<ImageContext[]>([]),[imageError,setImageError]=useState(''),[attaching,setAttaching]=useState(false);
   const imageInput=useRef<HTMLInputElement>(null),readingImages=useRef(false);
-  const [models,setModels]=useState<Model[]>([]),[modelId,setModelId]=useState(''),[text,setText]=useState(''),[modelNotice,setModelNotice]=useState('');
+  const [models,setModels]=useState<Model[]>([]),[modelId,setModelId]=useState(''),[text,setText]=useState(''),[modelNotice,setModelNotice]=useState(''),[modelsDenied,setModelsDenied]=useState(false);
   const [events,setEvents]=useState<ChatEntry[]>([]),[error,setError]=useState(''),[busy,setBusy]=useState(false),[modelsLoading,setModelsLoading]=useState(true),[historyLoading,setHistoryLoading]=useState(false);
   const [question,setQuestion]=useState<Question|null>(null),[execution,setExecution]=useState(''),[conversation,setConversation]=useState<string|undefined>();
-  const [conversations,setConversations]=useState<Conversation[]>([]),[conversationsLoading,setConversationsLoading]=useState(true),[historyError,setHistoryError]=useState('');
+  const [conversations,setConversations]=useState<Conversation[]>([]),[conversationsLoading,setConversationsLoading]=useState(true),[historyError,setHistoryError]=useState(''),[historyDenied,setHistoryDenied]=useState(false);
   const [usage,setUsage]=useState<DailyUsage|null>(null),[usageError,setUsageError]=useState('');
   const [filter,setFilter]=useState(''),[historyCount,setHistoryCount]=useState(15);
   const [localArtifact,setLocalArtifact]=useState<ChatArtifact|null>(null),[jumpVisible,setJumpVisible]=useState(false),[announcement,setAnnouncement]=useState('');
   const [renameTarget,setRenameTarget]=useState<Conversation|null>(null),[renameTitle,setRenameTitle]=useState(''),[renaming,setRenaming]=useState(false),[renameError,setRenameError]=useState('');
   const [deleteTarget,setDeleteTarget]=useState<Conversation|null>(null),[deleting,setDeleting]=useState(false),[deleteError,setDeleteError]=useState('');
   const controller=useRef<AbortController|null>(null),running=useRef(false),runId=useRef(0),alive=useRef(true),entryId=useRef(0);
+  const currentToken=useRef(token);currentToken.current=token;
+  const onUsageChangeRef=useRef(onUsageChange);onUsageChangeRef.current=onUsageChange;
+  const onExecutionStateChangeRef=useRef(onExecutionStateChange);onExecutionStateChangeRef.current=onExecutionStateChange;
   const log=useRef<HTMLDivElement>(null),prompt=useRef<PromptInputProps.Ref>(null),atBottom=useRef(true),previewTrigger=useRef<HTMLElement|null>(null);
+  function isStale(reqToken:string){return !alive.current||(isApiTokenMode&&currentToken.current!==reqToken);}
+  function reportExecution(info:ExecutionDebugInfo){onExecutionStateChangeRef.current?.(info);}
   function entry(event:ChatEvent,at?:string):ChatEntry{return {...event,id:`chat-event-${++entryId.current}`,at};}
   function append(event:ChatEvent){const row=entry(event);setEvents(previous=>{if(event.type==='thinking'||event.type==='tool'){const currentTurn=previous.map(item=>item.type).lastIndexOf('user');const existing=previous.findIndex((item,index)=>index>currentTurn&&item.type===event.type&&'id' in item.data&&item.data.id===event.data.id);if(existing>=0)return previous.map((item,index)=>index===existing?{...row,id:item.id}:item);}return [...previous,row];});}
-  function refreshUsage(){void api<DailyUsage>('/api/chat/usage',token).then(value=>{if(!value||!['daily_token_limit','total_tokens','remaining_tokens'].every(key=>typeof (value as unknown as Record<string,unknown>)[key]==='number'))throw new Error('Invalid usage response');if(alive.current){setUsage(value);setUsageError('');}}).catch(()=>{if(alive.current)setUsageError('Daily usage is unavailable. Limits are still checked by the server.');});}
-  async function refreshConversations(){try{const rows=await api<Conversation[]>('/api/chat/conversations',token);if(alive.current){setConversations(rows);setHistoryError('');}}catch(error){if(alive.current)setHistoryError((error as Error).message);}finally{if(alive.current)setConversationsLoading(false);}}
+  function refreshUsage(){
+    const reqToken=currentToken.current;
+    if(!canReadUsage){
+      const msg='Daily usage is unavailable because this API token lacks agent:usage:read. Server-side limits still apply.';
+      setUsage(null);setUsageError(msg);onUsageChangeRef.current?.(null,msg);return;
+    }
+    void api<DailyUsage>('/api/chat/usage',reqToken,{},authOptions).then(value=>{
+      if(!value||!['daily_token_limit','total_tokens','remaining_tokens'].every(key=>typeof (value as unknown as Record<string,unknown>)[key]==='number'))throw new Error('Invalid usage response');
+      if(!isStale(reqToken)){setUsage(value);setUsageError('');onUsageChangeRef.current?.(value,'');}
+    }).catch(err=>{
+      if(isStale(reqToken))return;
+      const msg=err instanceof ApiError&&err.status===403
+        ?(err.message||'Daily usage access was denied for this API token (403). Limits are still checked by the server.')
+        :'Daily usage is unavailable. Limits are still checked by the server.';
+      setUsage(null);setUsageError(msg);onUsageChangeRef.current?.(null,msg);
+    });
+  }
+  async function refreshConversations(){
+    const reqToken=currentToken.current;
+    if(!canReadConversations){
+      if(!isStale(reqToken)){
+        setConversations([]);setHistoryDenied(true);setConversationsLoading(false);
+        setHistoryError('This API token does not permit agent:conversations:read. Saved conversation history is unavailable.');
+      }
+      return;
+    }
+    try{
+      const rows=await api<Conversation[]>('/api/chat/conversations',reqToken,{},authOptions);
+      if(!isStale(reqToken)){setConversations(rows);setHistoryError('');setHistoryDenied(false);}
+    }catch(err){
+      if(isStale(reqToken))return;
+      if(err instanceof ApiError&&err.status===403)setHistoryDenied(true);
+      setHistoryError((err as Error).message);
+    }finally{
+      if(!isStale(reqToken))setConversationsLoading(false);
+    }
+  }
   useEffect(()=>{
     alive.current=true;
     return ()=>{alive.current=false;controller.current?.abort();};
   },[]);
   useEffect(()=>{
     let active=true;
+    const reqToken=token;
     refreshUsage();void refreshConversations();
-    void api<Model[]>('/api/chat/models',token).then(items=>{if(active){setModels(items);setModelId(previous=>items.some(item=>item.id===previous)?previous:items[0]?.id||'');}}).catch(error=>{if(active)setError(error.message);}).finally(()=>{if(active)setModelsLoading(false);});
+    if(!canListModels){
+      setModels([]);setModelId('');setModelsDenied(true);setModelsLoading(false);
+    }else{
+      setModelsDenied(false);
+      void api<Model[]>('/api/chat/models',reqToken,{},authOptions).then(items=>{
+        if(active&&!isStale(reqToken)){setModels(items);setModelId(previous=>items.some(item=>item.id===previous)?previous:items[0]?.id||'');}
+      }).catch(err=>{
+        if(!active||isStale(reqToken))return;
+        if(err instanceof ApiError&&err.status===403)setModelsDenied(true);
+        setError((err as Error).message);
+      }).finally(()=>{if(active&&!isStale(reqToken))setModelsLoading(false);});
+    }
     return ()=>{active=false;};
-  },[token]);
+  },[token,isApiTokenMode,canListModels,canReadUsage,canReadConversations]);
   useEffect(()=>{const node=log.current;if(!node)return;if(atBottom.current){node.scrollTop=node.scrollHeight;setJumpVisible(false);}else setJumpVisible(true);},[events,busy,question]);
-  function receive(event:AgentEvent){
-    if(event.type==='execution'){setExecution(event.data.id);setConversation(event.data.conversation_id);}
-    if(event.type==='question'){setQuestion(event.data);setAnnouncement('The agent needs your input. Review the decision above the composer.');}
-    if(event.type==='error')setError(event.data.message);
+  function receive(event:AgentEvent,tracker:{executionId:string;conversationId?:string}){
+    if(event.type==='execution'){tracker.executionId=event.data.id;tracker.conversationId=event.data.conversation_id;setExecution(event.data.id);setConversation(event.data.conversation_id);reportExecution({executionId:event.data.id,conversationId:event.data.conversation_id,status:'streaming',lastEventType:'execution'});}
+    if(event.type==='question'){setQuestion(event.data);setAnnouncement('The agent needs your input. Review the decision.');reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'waiting',lastEventType:'question'});}
+    if(event.type==='error'){setError(event.data.message);reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'error',lastEventType:'error'});}
     if(event.type==='cards')setAnnouncement(event.data.legality.applicable===false?'Collection candidates ready. Review the researched printings and sources.':'Deck preview ready. Review the resolved printings and sources.');
-    if(event.type==='result')setAnnouncement(event.data.collection_summary?'Collection and budget ready. Open the preview to review the selected printings and spending allowance.':'Deck and budget ready. Open the preview to review quotations and sources.');
+    if(event.type==='result'){setAnnouncement(event.data.collection_summary?'Collection and budget ready. Open the preview to review the selected printings and spending allowance.':'Deck and budget ready. Open the preview to review quotations and sources.');reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'complete',lastEventType:'result'});}
+    if(event.type==='done'&&event.data.status!=='waiting'){reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'complete',lastEventType:'done'});}
     append(event);
   }
   async function run(path:string,body:unknown,restoreQuestion:Question|null=null){
     if(running.current)return;
+    const reqToken=currentToken.current;
     const id=++runId.current;running.current=true;setError('');setBusy(true);setQuestion(null);
-    const abort=new AbortController();controller.current=abort;let received=false,terminal=false;
-    try{await stream(path,token,body,event=>{if(!alive.current||id!==runId.current||abort.signal.aborted)return;received=true;if(['result','question','done','error'].includes(event.type))terminal=true;receive(event);},abort.signal);
-      if(!terminal&&!abort.signal.aborted)throw new Error('The response ended before completion. Review the activity and retry your request.');
-    }catch(error){if((error as Error).name!=='AbortError'&&!abort.signal.aborted&&alive.current){setError((error as Error).message);append({type:'error',data:{message:(error as Error).message}});if(restoreQuestion&&!received){setQuestion(restoreQuestion);}}}
-    finally{if(alive.current&&id===runId.current){running.current=false;setBusy(false);refreshUsage();void refreshConversations();}}
+    const abort=new AbortController();controller.current=abort;let received=false,terminal=false,incompleteStream=false;
+    const tracker={executionId:execution,conversationId:conversation};
+    reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'streaming'});
+    try{
+      await stream(path,reqToken,body,event=>{
+        if(isStale(reqToken)||id!==runId.current||abort.signal.aborted)return;
+        received=true;if(['result','question','done','error'].includes(event.type))terminal=true;
+        receive(event,tracker);
+      },abort.signal,authOptions);
+      if(!terminal&&!abort.signal.aborted&&!isStale(reqToken)){
+        incompleteStream=true;
+        reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'incomplete',lastEventType:'stream_ended'});
+        throw new Error('The response ended before completion. Review the activity and retry your request.');
+      }
+    }catch(err){
+      if(isStale(reqToken))return;
+      if((err as Error).name==='AbortError'||abort.signal.aborted){
+        reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'stopped_local',lastEventType:'stopped'});
+      }else{
+        reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:incompleteStream?'incomplete':'error',lastEventType:incompleteStream?'stream_ended':'error'});
+        setError((err as Error).message);append({type:'error',data:{message:(err as Error).message}});
+        if(restoreQuestion&&!received){setQuestion(restoreQuestion);}
+      }
+    }
+    finally{
+      if(!isStale(reqToken)&&id===runId.current){
+        running.current=false;setBusy(false);refreshUsage();void refreshConversations();
+      }
+    }
   }
   const quotaBlocked=!!usage&&(usage.remaining_tokens===0||usage.unverified_usage);
   const locked=busy||historyLoading||attaching;
@@ -82,15 +192,19 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     catch(error){if(alive.current)setImageError((error as Error).message);}
     finally{readingImages.current=false;if(alive.current)setAttaching(false);}
   }
-  function send(){if((!text.trim()&&!images.length)||running.current||historyLoading||attaching||!modelId||question||quotaBlocked)return;const request=text.trim();setAnnouncement('Request sent. The agent is working.');atBottom.current=true;append({type:'user',data:{text:request,images}});setText('');setImages([]);setImageError('');void run('/api/chat/executions',{text:request,images,model_id:modelId,conversation_id:conversation});}
-  function decide(decision:Decision){if(running.current||historyLoading||!question)return;const current=question;setAnnouncement('Decision submitted. The agent is continuing.');atBottom.current=true;append({type:'user',data:{text:decisionText(decision,current),decision}});void run(`/api/chat/executions/${execution}/resume`,decision,current);prompt.current?.focus();}
+  function send(){if((!text.trim()&&!images.length)||running.current||historyLoading||attaching||!modelId||question||quotaBlocked||!canCreateExecution)return;const request=text.trim();setAnnouncement('Request sent. The agent is working.');atBottom.current=true;append({type:'user',data:{text:request,images}});setText('');setImages([]);setImageError('');void run('/api/chat/executions',{text:request,images,model_id:modelId,conversation_id:conversation});}
+  function decide(decision:Decision){if(running.current||historyLoading||!question||!canResumeExecution(execution))return;const current=question;setAnnouncement('Decision submitted. The agent is continuing.');atBottom.current=true;append({type:'user',data:{text:decisionText(decision,current),decision}});void run(`/api/chat/executions/${execution}/resume`,decision,current);prompt.current?.focus();}
   function stop(){if(!running.current||controller.current?.signal.aborted)return;controller.current?.abort();append({type:'stopped',data:{message:'You stopped this execution.'}});setAnnouncement('Execution stopped. You can edit and reuse the request.');}
   function closePreview(){setLocalArtifact(null);onPreview?.(null);}
-  function newConversation(){if(locked)return;setConversation(undefined);setEvents([]);setImages([]);setImageError('');setQuestion(null);setExecution('');setError('');closePreview();atBottom.current=true;setAnnouncement('New conversation started.');onConversationSelected?.();prompt.current?.focus();}
+  function newConversation(){if(locked)return;setConversation(undefined);setEvents([]);setImages([]);setImageError('');setQuestion(null);setExecution('');setError('');reportExecution({conversationId:undefined,executionId:'',status:'idle'});closePreview();atBottom.current=true;setAnnouncement('New conversation started.');onConversationSelected?.();prompt.current?.focus();}
   async function load(id:string){
-    if(locked||running.current)return;setHistoryLoading(true);setError('');
+    if(locked||running.current)return;
+    const reqToken=currentToken.current;
+    setHistoryLoading(true);setError('');
     try{
-      const history=await api<HistoryRow[]>(`/api/chat/conversations/${id}`,token);let previousQuestion:Question|null=null;
+      const history=await api<HistoryRow[]>(`/api/chat/conversations/${id}`,reqToken,{},authOptions);
+      if(isStale(reqToken))return;
+      let previousQuestion:Question|null=null;
       const restored=history.flatMap(row=>{
         if(row.role==='user'&&row.content.decision)return [entry({type:'user',data:{text:decisionText(row.content.decision,previousQuestion),decision:row.content.decision}},row.created_at)];
         if(row.role==='user'&&(row.content.text||row.content.images?.length))return [entry({type:'user',data:{text:row.content.text||'',images:row.content.images}},row.created_at)];
@@ -119,30 +233,54 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
         }
         deduplicated.push(item);
       }
-      let waitingQuestion:Question|null=null,waitingExecution='';const last=history.at(-1);
-      if(last?.content.type==='question'&&last.content.execution_id){const result=await api<{status:string}>(`/api/chat/executions/${last.content.execution_id}`,token);if(result.status==='waiting'){waitingQuestion=last.content.data as Question;waitingExecution=last.content.execution_id;}}
-      if(!alive.current)return;setImages([]);setImageError('');setConversation(id);setEvents(deduplicated);setQuestion(waitingQuestion);setExecution(waitingExecution);closePreview();atBottom.current=true;setJumpVisible(false);setAnnouncement('Conversation loaded.');onConversationSelected?.();
-    }catch(error){setError((error as Error).message);}finally{if(alive.current)setHistoryLoading(false);}
+      let waitingQuestion:Question|null=null,waitingExecution='';
+      const last=history.at(-1);
+      const lastExecutionId=[...history].reverse().find(row=>row.content.execution_id)?.content.execution_id||'';
+      let executionWarning='';
+      let nextStatus:ExecutionDebugInfo['status']='idle';
+      if(last?.content.type==='question'&&last.content.execution_id){
+        if(!canReadExecution(last.content.execution_id)){
+          executionWarning='Conversation loaded, but this token lacks agent:executions:read permission to verify whether the waiting execution can be resumed.';
+        }else{
+          try{
+            const result=await api<{status:string}>(`/api/chat/executions/${last.content.execution_id}`,reqToken,{},authOptions);
+            if(result.status==='waiting'){waitingQuestion=last.content.data as Question;waitingExecution=last.content.execution_id;nextStatus='waiting';}
+          }catch(execErr){
+            if(execErr instanceof ApiError&&execErr.status===403){
+              executionWarning=execErr.message||'Conversation loaded, but inspecting the waiting execution was denied (403).';
+            }else{
+              throw execErr;
+            }
+          }
+        }
+      }
+      if(isStale(reqToken))return;
+      const effectiveExec=waitingExecution||lastExecutionId;
+      setImages([]);setImageError('');setConversation(id);setEvents(deduplicated);setQuestion(waitingQuestion);setExecution(effectiveExec);
+      if(executionWarning)setError(executionWarning);
+      reportExecution({conversationId:id,executionId:effectiveExec,status:nextStatus});
+      closePreview();atBottom.current=true;setJumpVisible(false);setAnnouncement('Conversation loaded.');onConversationSelected?.();
+    }catch(err){if(!isStale(reqToken))setError((err as Error).message);}finally{if(!isStale(reqToken))setHistoryLoading(false);}
   }
   async function handleRename(){
-    if(!renameTarget||!renameTitle.trim())return;
+    if(!renameTarget||!renameTitle.trim()||!canRenameConversation(renameTarget.id))return;
     setRenaming(true);setRenameError('');
     try{
-      const updated=await api<Conversation>(`/api/chat/conversations/${renameTarget.id}`,token,{method:'PUT',body:JSON.stringify({title:renameTitle.trim()})});
+      const updated=await api<Conversation>(`/api/chat/conversations/${renameTarget.id}`,token,{method:'PUT',body:JSON.stringify({title:renameTitle.trim()})},authOptions);
       setConversations(previous=>previous.map(item=>item.id===renameTarget.id?{...item,title:updated.title}:item));
       setRenameTarget(null);
-    }catch(error){setRenameError((error as Error).message);}finally{setRenaming(false);}
+    }catch(err){setRenameError((err as Error).message);}finally{setRenaming(false);}
   }
   async function handleDelete(){
-    if(!deleteTarget)return;
+    if(!deleteTarget||!canDeleteConversation(deleteTarget.id))return;
     setDeleting(true);setDeleteError('');
     try{
-      await api<{status:string}>(`/api/chat/conversations/${deleteTarget.id}`,token,{method:'DELETE'});
+      await api<{status:string}>(`/api/chat/conversations/${deleteTarget.id}`,token,{method:'DELETE'},authOptions);
       const targetId=deleteTarget.id;
       setConversations(previous=>previous.filter(item=>item.id!==targetId));
       if(conversation===targetId)newConversation();
       setDeleteTarget(null);
-    }catch(error){setDeleteError((error as Error).message);}finally{setDeleting(false);}
+    }catch(err){setDeleteError((err as Error).message);}finally{setDeleting(false);}
   }
   function openArtifact(artifact:ChatArtifact){previewTrigger.current=document.activeElement as HTMLElement;if(onPreview)onPreview(artifact);else setLocalArtifact(artifact);}
   function reuse(request:string,context:ImageContext[]=[]){if(locked||question)return;setText(request);setImages(context);setImageError('');prompt.current?.focus();setAnnouncement('Request copied to the composer. Review it before sending.');}
@@ -158,8 +296,12 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     <Header variant="h2" counter={`(${conversations.length})`} actions={<Button data-testid="new-conversation-button" variant="icon" iconName="add-plus" ariaLabel="New conversation" disabled={locked} onClick={newConversation}/>}>Conversations</Header>
     <SpaceBetween size="m">
       <TextFilter filteringText={filter} filteringPlaceholder="Find a conversation" filteringAriaLabel="Find a conversation" onChange={({detail})=>{setFilter(detail.filteringText);setHistoryCount(15);}}/>
-      {conversationsLoading?<StatusIndicator type="loading">Loading conversations</StatusIndicator>:historyError?<Alert type="error" header="History unavailable" action={<Button onClick={()=>void refreshConversations()}>Retry history</Button>}>{historyError}</Alert>:<div>
-        <List ariaLabel="Saved conversations" items={filtered.slice(0,historyCount)} renderItem={row=>({id:row.id,content:<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',width:'100%',gap:'8px'}}><div style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}><Button variant="inline-link" disabled={locked} nativeButtonAttributes={{'aria-current':row.id===conversation?'page':undefined}} onClick={()=>void load(row.id)}>{row.title}</Button></div><SpaceBetween direction="horizontal" size="xxs"><Button variant="icon" iconName="edit" ariaLabel={`Rename conversation ${row.title}`} disabled={locked} onClick={event=>{event.stopPropagation();setRenameTarget(row);setRenameTitle(row.title);setRenameError('');}}/><Button variant="icon" iconName="remove" ariaLabel={`Delete conversation ${row.title}`} disabled={locked} onClick={event=>{event.stopPropagation();setDeleteTarget(row);setDeleteError('');}}/></SpaceBetween></div>})}/>
+      {conversationsLoading?<StatusIndicator type="loading">Loading conversations</StatusIndicator>:historyError?historyDenied?<Alert type="info" header="History unavailable">{historyError}</Alert>:<Alert type="error" header="History unavailable" action={<Button onClick={()=>void refreshConversations()}>Retry history</Button>}>{historyError}</Alert>:<div>
+        <List ariaLabel="Saved conversations" items={filtered.slice(0,historyCount)} renderItem={row=>{
+          const allowRename=canRenameConversation(row.id);
+          const allowDelete=canDeleteConversation(row.id);
+          return {id:row.id,content:<div style={{display:'flex',alignItems:'center',justifyContent:'space-between',width:'100%',gap:'8px'}}><div style={{flex:1,minWidth:0,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}><Button variant="inline-link" disabled={locked} nativeButtonAttributes={{'aria-current':row.id===conversation?'page':undefined}} onClick={()=>void load(row.id)}>{row.title}</Button></div>{(allowRename||allowDelete)&&<SpaceBetween direction="horizontal" size="xxs">{allowRename&&<Button variant="icon" iconName="edit" ariaLabel={`Rename conversation ${row.title}`} disabled={locked} onClick={event=>{event.stopPropagation();setRenameTarget(row);setRenameTitle(row.title);setRenameError('');}}/>}{allowDelete&&<Button variant="icon" iconName="remove" ariaLabel={`Delete conversation ${row.title}`} disabled={locked} onClick={event=>{event.stopPropagation();setDeleteTarget(row);setDeleteError('');}}/>}</SpaceBetween>}</div>};
+        }}/>
         {!filtered.length&&<Box color="text-body-secondary">{filter?'No matching conversations. Try another search.':'Your conversations will appear here after your first request.'}</Box>}
         {filtered.length>historyCount&&<Button variant="inline-link" onClick={()=>setHistoryCount(count=>count+15)}>View more conversations</Button>}
       </div>}
@@ -170,16 +312,30 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     <div className="chat-navigation-content">{history}</div>
   </div>;
   const modelControl=<div className="chat-model-control"><Select ariaLabel="Model" data-testid="model-select" disabled={locked} statusType={modelsLoading?'loading':'finished'} loadingText="Loading models" expandToViewport selectedOption={selectedModel?{label:selectedModel.label,value:modelId}:null} options={models.map(model=>({label:model.label,value:model.id,description:model.provider==='openai'?'OpenAI':'Mistral'}))} onChange={({detail})=>{const next=models.find(model=>model.id===detail.selectedOption.value);setModelId(detail.selectedOption.value||'');setModelNotice(`Model changed to ${next?.label}. Your next request will use this model.`);}} placeholder="No enabled models"/></div>;
+  const quotaMessage=usage?.unverified_usage
+    ?(isApiTokenMode?'Token usage for this principal could not be verified. Model calls are blocked until the daily reset.':'Token usage could not be verified. Model calls are blocked until the daily reset.')
+    :isApiTokenMode&&usage?.daily_token_limit===0
+      ?'This API principal role has a daily token limit of 0. Model calls are blocked.'
+      :isApiTokenMode
+        ?'This API principal reached its daily token quota. It resets at midnight Japan time.'
+        :'Your daily token quota is reached. It resets at midnight Japan time.';
+  const modelSummaryText=modelsLoading
+    ?'Loading models…'
+    :modelsDenied
+      ?'This API token lacks agent:models:list permission to list enabled models.'
+      :modelNotice||(selectedModel?`Active model: ${selectedModel.label}`:(isApiTokenMode?'No enabled models are permitted for this API principal role.':'An administrator must enable a model before you can send a request.'));
   const composer=<div className="chat-composer-content">
     <input ref={imageInput} type="file" accept="image/png,image/jpeg,image/webp" multiple hidden aria-label="Choose image context" onChange={event=>{void addImages(Array.from(event.target.files||[]));event.target.value='';}}/>
     {imageError&&<Alert type="error" dismissible onDismiss={()=>setImageError('')}>{imageError}</Alert>}
     {attaching&&<StatusIndicator type="loading">Reading image context</StatusIndicator>}
     {jumpVisible&&<div className="chat-jump"><Button iconName="arrow-down" onClick={()=>{const node=log.current;if(node){node.scrollTop=node.scrollHeight;atBottom.current=true;setJumpVisible(false);}}}>Jump to latest</Button></div>}
     {error&&!events.some(event=>event.type==='error'&&event.data.message===error)&&<Alert data-testid="chat-error" type="error" header="Unable to complete the request" dismissible onDismiss={()=>setError('')}>{error}</Alert>}
-    {question&&<div className="chat-decision-dock"><DecisionPanel key={`${execution}-${question.question}`} question={question} onDecision={decide} busy={locked}/></div>}
-    {quotaBlocked&&<Alert type="warning">{usage?.unverified_usage?'Token usage could not be verified. Model calls are blocked until the daily reset.':'Your daily token quota is reached. It resets at midnight Japan time.'}</Alert>}
-    <FormField stretch constraintText={<div role="status" aria-live="polite" data-testid="active-model-summary" className="chat-model-notice">{modelsLoading?'Loading models…':modelNotice|| (selectedModel?`Active model: ${selectedModel.label}`:'An administrator must enable a model before you can send a request.')}{question&&' · The waiting execution keeps its original model.'}</div>}>
-      <PromptInput autoFocus ref={prompt} data-testid="chat-prompt-input" nativeTextareaAttributes={{...settingsInputAttributes,'data-testid':'chat-prompt-textarea',onPaste:event=>{const files=Array.from(event.clipboardData.files);if(files.length){event.preventDefault();void addImages(files);}}}} ariaLabel="Purchase request" value={text} onChange={({detail})=>setText(detail.value)} onAction={send} readOnly={locked} customPrimaryAction={busy?<Button variant="icon" iconName="stop-circle" ariaLabel="Stop execution" onClick={stop}/>:undefined} disabled={!busy&&(!!question||!modelId||quotaBlocked)} minRows={2} maxRows={6} i18nStrings={{actionButtonAriaLabel:busy?'Stop execution':'Send request'}} actionButtonIconName={busy?'stop-circle':'send'} disableActionButton={!busy&&((!text.trim()&&!images.length)||locked||!!question||!modelId||quotaBlocked)} placeholder="Ask a question or paste an image" secondaryContent={images.length?<ImageAttachments images={images} disabled={locked} onRemove={index=>{setImages(previous=>previous.filter((_,i)=>i!==index));setImageError('');}}/>:undefined} secondaryActions={<div className="chat-prompt-tools"><Button variant="icon" iconName="upload" ariaLabel="Attach images" disabled={locked||!!question||images.length>=MAX_IMAGES} onClick={()=>imageInput.current?.click()}/><Button variant="icon" iconName="settings" href="#preferences" ariaLabel="Agent preferences"/>{modelControl}<Popover header="Daily allowance" content={<SpaceBetween size="s"><Box>{usage?`${usage.total_tokens.toLocaleString()} / ${usage.daily_token_limit.toLocaleString()} tokens used. ${usage.remaining_tokens.toLocaleString()} remaining.`:usageError||'Checking daily allowance.'}</Box><Box>Input + output tokens per user. Resets at midnight Japan time. In-flight responses may finish beyond the remaining balance.</Box></SpaceBetween>}><span>{usage?`${usage.remaining_tokens.toLocaleString()} tokens left`:'Daily allowance'}</span></Popover><Popover header="How budgets are calculated" content="Paste or attach up to 3 PNG, JPEG or WebP images (2 MiB each). Sent images are saved in this conversation and shared with the selected model. The latest 3 images are used as context. Prices are compared within each currency. Unknown shipping stays unknown. Missing cards require your explicit decision. Results retain sources and retrieval dates."><span>Images and quotations</span></Popover></div>}/>
+    {!canCreateExecution&&<Alert type="warning" header="Execution creation not permitted">This API token lacks agent:executions:create permission to start new requests.</Alert>}
+    {question&&!canResumeExecution(execution)&&<Alert type="warning" header="Execution resume not permitted">This API token lacks agent:executions:resume permission to answer the waiting question.</Alert>}
+    {question&&<div className="chat-decision-dock"><DecisionPanel key={`${execution}-${question.question}`} question={question} onDecision={decide} busy={locked||!canResumeExecution(execution)}/></div>}
+    {quotaBlocked&&<Alert type="warning">{quotaMessage}</Alert>}
+    <FormField stretch constraintText={<div role="status" aria-live="polite" data-testid="active-model-summary" className="chat-model-notice">{modelSummaryText}{question&&' · The waiting execution keeps its original model.'}</div>}>
+      <PromptInput autoFocus ref={prompt} data-testid="chat-prompt-input" nativeTextareaAttributes={{...settingsInputAttributes,'data-testid':'chat-prompt-textarea',onPaste:event=>{const files=Array.from(event.clipboardData.files);if(files.length){event.preventDefault();void addImages(files);}}}} ariaLabel="Purchase request" value={text} onChange={({detail})=>setText(detail.value)} onAction={send} readOnly={locked} customPrimaryAction={busy?<Button variant="icon" iconName="stop-circle" ariaLabel="Stop execution" onClick={stop}/>:undefined} disabled={!busy&&(!!question||!modelId||quotaBlocked||!canCreateExecution)} minRows={2} maxRows={6} i18nStrings={{actionButtonAriaLabel:busy?'Stop execution':'Send request'}} actionButtonIconName={busy?'stop-circle':'send'} disableActionButton={!busy&&((!text.trim()&&!images.length)||locked||!!question||!modelId||quotaBlocked||!canCreateExecution)} placeholder="Ask a question or paste an image" secondaryContent={images.length?<ImageAttachments images={images} disabled={locked} onRemove={index=>{setImages(previous=>previous.filter((_,i)=>i!==index));setImageError('');}}/>:undefined} secondaryActions={<div className="chat-prompt-tools"><Button variant="icon" iconName="upload" ariaLabel="Attach images" disabled={locked||!!question||images.length>=MAX_IMAGES||!canCreateExecution} onClick={()=>imageInput.current?.click()}/><Button variant="icon" iconName="settings" href="#preferences" ariaLabel="Agent preferences"/>{modelControl}<Popover header="Daily allowance" content={<SpaceBetween size="s"><Box>{usage?`${usage.total_tokens.toLocaleString()} / ${usage.daily_token_limit.toLocaleString()} tokens used. ${usage.remaining_tokens.toLocaleString()} remaining.`:usageError||'Checking daily allowance.'}</Box><Box>Input + output tokens per principal. Resets at midnight Japan time. In-flight responses may finish beyond the remaining balance.</Box></SpaceBetween>}><span>{usage?`${usage.remaining_tokens.toLocaleString()} tokens left`:isApiTokenMode&&usageError?'Usage unavailable':'Daily allowance'}</span></Popover><Popover header="How budgets are calculated" content="Paste or attach up to 3 PNG, JPEG or WebP images (2 MiB each). Sent images are saved in this conversation and shared with the selected model. The latest 3 images are used as context. Prices are compared within each currency. Unknown shipping stays unknown. Missing cards require your explicit decision. Results retain sources and retrieval dates."><span>Images and quotations</span></Popover></div>}/>
     </FormField>
   </div>;
   const hasStarted=events.length>0||historyLoading;
@@ -203,7 +359,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
             if(event.type==='cards')return <div id={event.id} key={event.id} tabIndex={-1} className="chat-turn"><ChatBubble type="incoming" avatar={agentAvatar()} ariaLabel="Agent deck preview">I resolved these card printings. Review quantities and variants before continuing.</ChatBubble><ArtifactPreview artifact={{id:event.id,kind:'deck',...event.data}} onOpen={openArtifact}/></div>;
             if(event.type==='result')return <div id={event.id} key={event.id} tabIndex={-1} className="chat-turn"><ChatBubble type="incoming" avatar={agentAvatar()} ariaLabel="Agent budget result" actions={<CopyToClipboard variant="icon" textToCopy={event.data.recommendation} copyButtonAriaLabel="Copy recommendation" copySuccessText="Recommendation copied" copyErrorText="Unable to copy"/>}><div className="chat-ai-label">Deck agent · Generated by AI</div><div className="chat-message-text"><Markdown text={event.data.recommendation||'Your deck and budget are ready for review.'}/></div>{date&&<Box fontSize="body-s" color="text-body-secondary">{date}</Box>}</ChatBubble><ArtifactPreview artifact={{id:event.id,kind:'budget',result:event.data}} onOpen={openArtifact}/></div>;
             if(event.type==='question')return <div id={event.id} key={event.id} tabIndex={-1}><ChatBubble type="incoming" avatar={agentAvatar()} ariaLabel="Agent question"><div className="chat-message-text"><Markdown text={event.data.question}/></div></ChatBubble></div>;
-            if(event.type==='stopped')return <div id={event.id} key={event.id} tabIndex={-1}><StatusIndicator type="stopped">{event.data.message}</StatusIndicator></div>;
+            if(event.type==='stopped')return <div id={event.id} key={event.id} tabIndex={-1}><StatusIndicator type="stopped">{event.data.message}</StatusIndicator>{isApiTokenMode&&<Box fontSize="body-s" color="text-body-secondary">Browser SSE listening stopped. Server-side cancellation occurs only if the proxy connection tears down cleanly.</Box>}</div>;
             return <div id={event.id} key={event.id} tabIndex={-1}><Alert type="error" header="Request interrupted">{event.data.message}</Alert></div>;
           })}</SpaceBetween>
           {busy&&!question&&<div className="chat-working"><ChatBubble type="incoming" avatar={agentAvatar(true)} ariaLabel="Agent working" showLoadingBar>{currentLabel}</ChatBubble></div>}
