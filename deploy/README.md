@@ -23,6 +23,75 @@ models only after verifying their actual provider API ID. The requested presets
 are `gpt-6-luna`, `gpt-6.1-terra` and `mistral-medium-latest`; enabling a registry
 entry never guarantees inference quota. There is no automatic model replacement.
 
+### Standalone API tester Docker deployment
+
+This is an alternative to the full Compose stack and the hosted Pages portals.
+It starts only a non-root Node24 container containing the API tester and a
+same-origin HTTP/SSE proxy. It uses existing auth/chat services, their IAM roles
+and their per-principal quotas. It does not provision a database or restart the
+existing application. Python3.11+ and Docker are sufficient on the host; Node and
+frontend build dependencies run inside Docker.
+
+```sh
+python -m scripts.api_tester up --token "$TCG_API_TOKEN"
+# Open http://127.0.0.1:8090/api-test/
+python -m scripts.api_tester down
+```
+
+The defaults are `https://api.auth.tcg-marketplace.02labs.me` and
+`https://api.chat.tcg-marketplace.02labs.me`. Base URLs point at the service root,
+or include `/api/auth` and `/api/chat` when using a gateway. The container proxies
+auth session introspection and agent endpoints, so no CORS changes are required.
+It strips cookies in both directions, never supplies a server-side fallback
+credential, streams responses without buffering, and closes the upstream request
+when the browser disconnects. TLS verification remains enabled.
+
+Use `--token-stdin` to keep the token out of process arguments as well:
+
+```sh
+printf '%s\n' "$TCG_API_TOKEN" | python -m scripts.api_tester up --token-stdin
+```
+
+The launcher transfers the token through `docker exec -i` stdin into a mode0600
+temporary file on container tmpfs, never a build argument, image layer, Docker
+environment variable or URL. The frontend consumes it once through a no-cache,
+same-origin bootstrap request, which removes that file, then authenticates as
+the API principal through the ordinary tester transport. After consumption it
+is held only in browser memory. Reloading, disconnecting or restarting requires
+manual token entry or a new launch. The launch token must already exist; this
+command does not create or revoke credentials. An invalid/expired token shows
+the normal connection error. Browser storage stays disabled.
+
+The port binds to `127.0.0.1` only. Open the exact printed URL, since the proxy
+checks its origin and Host. Keep this private testing container local; it does
+not provide a public login or remote hosting layer. No extra CORS permissions
+or bypass of IAM/2FA is introduced.
+
+For the existing local Compose services, attach to their network explicitly:
+
+```sh
+python -m scripts.api_tester up --token "$TCG_API_TOKEN" \
+  --network pokemon-tcg-poc_private \
+  --auth-url http://auth:8000 --chat-url http://orchestrator:8000
+```
+
+`localhost` inside the container refers to the container itself. Use reachable
+service names, a reachable gateway address, or the hosted HTTPS URLs. Set
+`--port 8091` and `--name another-tester` for a separate instance; use the same
+name for `down`. Existing containers are never replaced. `down` refuses to
+remove containers without the launcher's ownership label. `--no-build` reuses
+`tcg-api-tester:local`; `--image` selects another image tag and `--build-network`
+overrides the Docker build network when needed by the host. The container has a
+read-only filesystem, no added capabilities and a health check. Build failures
+leave existing services unchanged; failed starts remove only the new container.
+
+Standalone checks (no live model calls):
+
+```sh
+node --test tests/api-tester-server.test.mjs
+.venv/bin/pytest -q tests/test_api_tester_cli.py
+```
+
 ### Web search MCP service (`ddg-mcp`)
 
 The Compose stack also runs `ddg-mcp`, a stateless DuckDuckGo search/fetch MCP

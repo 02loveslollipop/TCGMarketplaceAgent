@@ -120,6 +120,16 @@ To bypass 2FA challenges during local automated smoke testing:
 LOCAL_DEV_PASSWORD_ONLY=true docker compose up -d --build auth
 ```
 
+### Alternative: deploy only the API tester in Docker
+
+To test existing services without starting the full stack or provisioning a database:
+
+```bash
+python -m scripts.api_tester up --token "$TCG_API_TOKEN"
+```
+
+Open [http://127.0.0.1:8090/api-test/](http://127.0.0.1:8090/api-test/). The command builds the standalone image, starts a local container, and connects once using the supplied API-principal token. It defaults to the deployed auth/chat services; use `--auth-url` and `--chat-url` to choose other services. Stop it with `python -m scripts.api_tester down`. See [standalone API tester deployment](deploy/README.md#standalone-api-tester-docker-deployment) for stdin input, local-stack networking and lifecycle details.
+
 ### 4. Running the test suite
 
 Execute the backend unit, integration, and regression suite (paid live tests are opt-in):
