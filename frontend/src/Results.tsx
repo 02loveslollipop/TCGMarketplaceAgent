@@ -5,6 +5,7 @@ import {safeHref} from './client';
 import {Markdown} from './Markdown';
 import {Price,ExchangeRateDetails} from './Currency';
 import {BudgetDownload} from './BudgetDownload';
+import {SupplierPriceEstimates} from './SupplierPriceEstimates';
 
 function variantDetails(card:BudgetLine|Missing):string {
   return [card.set_name,card.number&&`#${card.number}`,card.condition,card.language,card.printing].filter(Boolean).join(' · ') || 'Variant details unavailable';
@@ -64,22 +65,7 @@ export function BudgetResults({result}:{result:Result}) {
       <Table items={collection.lines} empty={<Box>No affordable collection could be established from verified, convertible price references.</Box>} columnDefinitions={[{id:'card',header:'Selected printing',isRowHeader:true,cell:line=><SpaceBetween size="xxs"><Box>{line.name}</Box><Box color="text-body-secondary">{line.set_name} · #{line.number}</Box></SpaceBetween>},{id:'supplier',header:'Price-guide source',cell:line=>line.supplier},{id:'cost',header:'Estimated product cost',cell:line=><Price amount={line.original_line_total} currency={line.original_currency} converted={line.converted_line_total} conversion={{status:'available',target_currency:collection.currency}}/>},{id:'source',header:'Evidence',cell:line=><Link external href={safeHref(line.source.url)}>{line.source.title}</Link>}]}/>
       <ExpandableSection headerText={`Other researched candidates (${collection.excluded_candidates.length})`}><Table items={collection.excluded_candidates} columnDefinitions={[{id:'card',header:'Printing',isRowHeader:true,cell:line=>line.name},{id:'reason',header:'Selection limitation',cell:line=>line.reason}]}/></ExpandableSection>
     </SpaceBetween></Container>}
-    {estimates.length>0&&<Container header={<Header variant="h3" description="Indicative card costs from price guides. Stock, condition, and language are unverified. Shipping, taxes, and fees are excluded.">{collection?'Supplier estimates for selected collection':'Estimated deck cost'}</Header>}>
-      <ColumnLayout columns={2} variant="text-grid">{estimates.map(estimate=><SpaceBetween key={`${estimate.supplier}-${estimate.currency}`} size="m">
-        <Header variant="h3">{estimate.supplier}</Header>
-        <KeyValuePairs items={[
-          {label:estimate.price_coverage_complete?'Estimated card subtotal':'Partial estimated card subtotal',value:money(estimate.product_subtotal,estimate.currency,estimate.converted?.product_subtotal)},
-          {label:'Price coverage',value:`${estimate.priced_cards} of ${estimate.requested_cards} cards`},
-          {label:'Purchase total',value:'Not confirmed'},
-        ]}/>
-        <ExpandableSection headerText="Card price estimates"><Table variant="embedded" items={estimate.lines} columnDefinitions={[
-          {id:'card',header:'Card',cell:line=>`${line.quantity} × ${line.name}`},
-          {id:'unit',header:'Unit price estimate',cell:line=>money(line.unit_price,estimate.currency,line.converted_unit_price)},
-          {id:'line',header:'Estimated line cost',cell:line=>money(line.line_total,estimate.currency,line.converted_line_total)},
-          {id:'source',header:'Source',cell:line=><Link external href={safeHref(line.source.url)}>{line.source.title}</Link>},
-        ]}/></ExpandableSection>
-      </SpaceBetween>)}</ColumnLayout>
-    </Container>}
+    {estimates.length>0&&<SupplierPriceEstimates estimates={estimates} cards={result.plan.cards} conversion={conversion} original={original} collection={Boolean(collection)}/>}
     <StatusIndicator type={collection?'info':result.legality.status==='verified'?'success':'warning'}>{collection?'Collectible printings · tournament legality not required':`Format legality: ${result.legality.status}`}</StatusIndicator>
     {result.legality.issues.map((issue,index)=><Alert key={index} type="warning">{issue}</Alert>)}
     {result.supplier_errors.map((error,index)=><Alert key={index} type="warning" header={error.supplier}>{error.message}</Alert>)}

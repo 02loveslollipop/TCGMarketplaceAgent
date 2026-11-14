@@ -49,7 +49,7 @@ it('defaults to converted deck costs with original prices, dated rates, and attr
   expect(screen.getByText('150 JPY')).toBeVisible();
   expect(screen.getByText('1 USD')).toBeVisible();
   expect(screen.getByRole('link',{name:'Rates By Exchange Rate API'})).toHaveAttribute('href','https://www.exchangerate-api.com');
-  expect(screen.getByText('Not confirmed')).toBeVisible();
+  expect(screen.getByText(/Purchase totals are not confirmed/)).toBeVisible();
   expect(screen.getByText('60 of 60 cards')).toBeVisible();
   await user.click(screen.getByRole('button',{name:'Original currencies'}));
   expect(screen.getAllByText('75.00 USD')[0]).toBeVisible();
