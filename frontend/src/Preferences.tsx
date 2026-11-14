@@ -1,4 +1,4 @@
-import {useEffect,useState} from 'react';
+import {useEffect,useRef,useState} from 'react';
 import {Alert,Box,Button,Container,Form,FormField,Header,Input,RadioGroup,Select,SpaceBetween,StatusIndicator} from '@cloudscape-design/components';
 import {ApiError,api,useClientTransport,type AuthMode} from './client';
 import type {Session,UserPreferences} from './contracts';
@@ -28,41 +28,54 @@ export function Preferences({token,authMode,onUnauthorized,session}:PreferencesP
   const [currencies,setCurrencies]=useState(commonCurrencies),[currencyWarning,setCurrencyWarning]=useState('');
   const [loading,setLoading]=useState(true),[loaded,setLoaded]=useState(false),[saving,setSaving]=useState(false);
   const [error,setError]=useState(''),[permissionDenied,setPermissionDenied]=useState(false),[success,setSuccess]=useState(''),[retry,setRetry]=useState(0);
+  const unmountAbortRef=useRef<AbortController|null>(null);
+  useEffect(()=>{
+    const abort=new AbortController();
+    unmountAbortRef.current=abort;
+    return ()=>{abort.abort();};
+  },[]);
   useEffect(()=>{
     let active=true;
+    const controller=new AbortController();
     if(!canReadPreferences){
       setLoading(false);setLoaded(false);setPermissionDenied(true);
       setError('This API token does not permit agent:preferences:read. Existing principal defaults remain managed server-side.');
-      return ()=>{active=false;};
+      return ()=>{active=false;controller.abort();};
     }
     setLoading(true);
     setPermissionDenied(false);
-    void api<UserPreferences>('/api/chat/preferences',token,{},authOptions).then(value=>{
-      if(active){setRuleset(value.ruleset);setFormat(value.format);setLocation(value.location||'');setCurrency(value.target_currency||null);setLoaded(true);setError('');setPermissionDenied(false);}
+    void api<UserPreferences>('/api/chat/preferences',token,{signal:controller.signal},authOptions).then(value=>{
+      if(active&&!controller.signal.aborted){setRuleset(value.ruleset);setFormat(value.format);setLocation(value.location||'');setCurrency(value.target_currency||null);setLoaded(true);setError('');setPermissionDenied(false);}
     }).catch(err=>{
-      if(!active)return;
+      if(!active||controller.signal.aborted||(err as Error).name==='AbortError')return;
       if(err instanceof ApiError&&err.status===403){
         setPermissionDenied(true);
         setError(err.message||'This credential is not permitted to read agent preferences.');
       }else{
         setError((err as Error).message||'Preferences could not be loaded.');
       }
-    }).finally(()=>{if(active)setLoading(false);});
-    void api<string[]>('/api/chat/currencies',token,{},authOptions).then(value=>{
+    }).finally(()=>{if(active&&!controller.signal.aborted)setLoading(false);});
+    void api<string[]>('/api/chat/currencies',token,{signal:controller.signal},authOptions).then(value=>{
       if(!Array.isArray(value)||!value.every(code=>typeof code==='string'&&/^[A-Z]{3}$/.test(code)))throw new Error('Unavailable currency list');
-      if(active){setCurrencies(value);setCurrencyWarning('');}
-    }).catch(()=>{if(active)setCurrencyWarning('The full currency list is unavailable. Common currencies and your saved choice remain available.');});
-    return ()=>{active=false;};
+      if(active&&!controller.signal.aborted){setCurrencies(value);setCurrencyWarning('');}
+    }).catch(()=>{if(active&&!controller.signal.aborted)setCurrencyWarning('The full currency list is unavailable. Common currencies and your saved choice remain available.');});
+    return ()=>{active=false;controller.abort();};
     // Session renewal must not overwrite an unsaved preference draft.
   },[retry,canReadPreferences]);
   const options=[{value:'original',label:'Original supplier currencies'},...[...new Set([...currencies,...(currency?[currency]:[])])].sort().map(code=>({value:code,label:currencyNames[code]?`${code} — ${currencyNames[code]}`:code}))];
   async function save(){
     if(!loaded||!canWritePreferences)return;
+    const signal=unmountAbortRef.current?.signal;
+    if(signal?.aborted)return;
     setSaving(true);setError('');setSuccess('');
     try{
-      await api<UserPreferences>('/api/chat/preferences',token,{method:'PUT',body:JSON.stringify({ruleset,format,location:location.trim(),target_currency:currency})},authOptions);
-      setSuccess('Preferences saved. New requests will use these settings.');
-    }catch(err){setError((err as Error).message);}finally{setSaving(false);}
+      await api<UserPreferences>('/api/chat/preferences',token,{method:'PUT',body:JSON.stringify({ruleset,format,location:location.trim(),target_currency:currency}),signal},authOptions);
+      if(!signal?.aborted)setSuccess('Preferences saved. New requests will use these settings.');
+    }catch(err){
+      if(!signal?.aborted&&(err as Error).name!=='AbortError')setError((err as Error).message);
+    }finally{
+      if(!signal?.aborted)setSaving(false);
+    }
   }
   const controlsDisabled=!canWritePreferences;
   return <SpaceBetween size="l">

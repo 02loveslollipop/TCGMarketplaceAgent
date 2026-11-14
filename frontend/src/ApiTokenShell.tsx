@@ -4,8 +4,8 @@ import AppLayoutToolbar from '@cloudscape-design/components/app-layout-toolbar';
 import type {AppLayoutProps,InputProps} from '@cloudscape-design/components';
 import {colorBackgroundContainerContent,colorBackgroundHomeHeader,colorBorderDividerDefault,colorTextHomeHeaderDefault} from '@cloudscape-design/design-tokens';
 import {ApiError,ClientTransportContext,api,configuredApiDestinations} from './client';
-import type {DailyUsage,ExecutionStatusSnapshot,Session} from './contracts';
-import {permits,roleLabel} from './iam';
+import type {DailyUsage,ExecutionStatusSnapshot,Model,Session} from './contracts';
+import {evaluateAgentCapability,permits,roleLabel} from './iam';
 import {Chat,type ExecutionDebugInfo} from './Chat';
 import {Preferences} from './Preferences';
 import {ArtifactContent,artifactTitle,type ChatArtifact} from './ChatArtifacts';
@@ -71,6 +71,7 @@ export function ApiTokenShell() {
   const [connectedToken, setConnectedToken] = useState('');
   const [session, setSession] = useState<Session | null>(null);
   const [connectionId, setConnectionId] = useState(0);
+  const [connectionEpoch, setConnectionEpoch] = useState(0);
 
   const [page, setPage] = useState<ApiPage>(pageFromHash);
   const [navigationOpen, setNavigationOpen] = useState(true);
@@ -83,6 +84,8 @@ export function ApiTokenShell() {
 
   const [usageSnapshot, setUsageSnapshot] = useState<DailyUsage | null>(null);
   const [usageError, setUsageError] = useState('');
+  const [availableModels, setAvailableModels] = useState<Model[]>([]);
+  const [selectedModelId, setSelectedModelId] = useState('');
   const [executionDebug, setExecutionDebug] = useState<ExecutionDebugInfo>({ executionId: '', status: 'idle' });
   const [executionPoll, setExecutionPoll] = useState<ExecutionStatusSnapshot | null>(null);
   const [executionPolling, setExecutionPolling] = useState(false);
@@ -90,8 +93,10 @@ export function ApiTokenShell() {
 
   const tokenInputRef = useRef<InputProps.Ref>(null);
   const connectionEpochRef = useRef(0);
+  const activeConnectionEpochRef = useRef(0);
   const activeTokenRef = useRef('');
-  activeTokenRef.current = connectedToken;
+  const activeExecutionIdRef = useRef('');
+  const pollEpochRef = useRef(0);
   const introspectAbortRef = useRef<AbortController | null>(null);
   const pollAbortRef = useRef<AbortController | null>(null);
 
@@ -102,20 +107,25 @@ export function ApiTokenShell() {
     return () => {
       window.removeEventListener('hashchange', onHash);
       connectionEpochRef.current += 1;
+      pollEpochRef.current += 1;
+      activeConnectionEpochRef.current = 0;
+      activeTokenRef.current = '';
+      activeExecutionIdRef.current = '';
       introspectAbortRef.current?.abort();
       pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
     };
   }, []);
 
-  const resetWorkspaceState = useCallback(() => {
-    setConnectedToken('');
-    setSession(null);
+  const resetWorkspaceUi = useCallback(() => {
     setTokenInput('');
     setTokenError('');
     setArtifact(null);
     setArtifactOpen(false);
     setUsageSnapshot(null);
     setUsageError('');
+    setAvailableModels([]);
+    setSelectedModelId('');
     setExecutionDebug({ executionId: '', status: 'idle' });
     setExecutionPoll(null);
     setExecutionPollError('');
@@ -124,13 +134,25 @@ export function ApiTokenShell() {
     if (window.location.hash && window.location.hash !== '#chat') {
       window.location.hash = 'chat';
     }
-    setConnectionId((value) => value + 1);
   }, []);
+
+  const resetWorkspaceState = useCallback(() => {
+    pollEpochRef.current += 1;
+    pollAbortRef.current?.abort();
+    pollAbortRef.current = null;
+    activeConnectionEpochRef.current = 0;
+    activeTokenRef.current = '';
+    activeExecutionIdRef.current = '';
+    setConnectionEpoch(0);
+    setConnectedToken('');
+    setSession(null);
+    resetWorkspaceUi();
+    setConnectionId((value) => value + 1);
+  }, [resetWorkspaceUi]);
 
   const disconnect = useCallback((noticeMessage: string, isErrorBanner = false) => {
     connectionEpochRef.current += 1;
     introspectAbortRef.current?.abort();
-    pollAbortRef.current?.abort();
     resetWorkspaceState();
     if (isErrorBanner) {
       setConnectError(noticeMessage);
@@ -141,24 +163,57 @@ export function ApiTokenShell() {
     }
   }, [resetWorkspaceState]);
 
-  const handleUnauthorized = useCallback((err: ApiError) => {
-    if (!activeTokenRef.current) return;
-    const detail = err.message ? ` Server response: ${err.message}` : '';
-    disconnect(
-      `Disconnected because the API token was rejected (401). Confirm the token is active and has not expired or been revoked.${detail}`,
-      true,
-    );
-  }, [disconnect]);
+  const disconnectForEpoch = useCallback(
+    (epoch: number, err: ApiError) => {
+      if (
+        !epoch ||
+        epoch !== connectionEpochRef.current ||
+        epoch !== activeConnectionEpochRef.current ||
+        !activeTokenRef.current
+      ) {
+        return;
+      }
+      const detail = err.message ? ` Server response: ${err.message}` : '';
+      disconnect(
+        `Disconnected because the API token was rejected (401). Confirm the token is active and has not expired or been revoked.${detail}`,
+        true,
+      );
+    },
+    [disconnect],
+  );
+
+  const handleUnauthorized = useMemo(
+    () => (err: ApiError) => {
+      disconnectForEpoch(connectionEpoch, err);
+    },
+    [connectionEpoch, disconnectForEpoch],
+  );
 
   const handleUsageChange = useCallback((nextUsage: DailyUsage | null, nextError: string) => {
     setUsageSnapshot(nextUsage);
     setUsageError(nextError);
   }, []);
 
+  const handleModelsChange = useCallback((models: Model[], nextSelectedModelId: string) => {
+    setAvailableModels(models);
+    setSelectedModelId(nextSelectedModelId);
+  }, []);
+
   const handleExecutionStateChange = useCallback((info: ExecutionDebugInfo) => {
+    const executionChanged = info.executionId !== activeExecutionIdRef.current;
+    if (executionChanged) {
+      activeExecutionIdRef.current = info.executionId;
+      pollEpochRef.current += 1;
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
+      setExecutionPolling(false);
+      setExecutionPoll(null);
+      setExecutionPollError('');
+    } else if (info.status === 'streaming') {
+      setExecutionPoll(null);
+      setExecutionPollError('');
+    }
     setExecutionDebug(info);
-    setExecutionPoll(null);
-    setExecutionPollError('');
   }, []);
 
   async function connect() {
@@ -198,23 +253,18 @@ export function ApiTokenShell() {
         return;
       }
 
+      pollEpochRef.current += 1;
+      pollAbortRef.current?.abort();
+      pollAbortRef.current = null;
+      activeConnectionEpochRef.current = epoch;
+      activeTokenRef.current = validation.token;
+      activeExecutionIdRef.current = '';
+      setConnectionEpoch(epoch);
       setConnectedToken(validation.token);
       setSession(result);
-      setTokenInput('');
-      setTokenError('');
       setConnectError('');
       setDisconnectNotice('');
-      setArtifact(null);
-      setArtifactOpen(false);
-      setUsageSnapshot(null);
-      setUsageError('');
-      setExecutionDebug({ executionId: '', status: 'idle' });
-      setExecutionPoll(null);
-      setExecutionPollError('');
-      setPage('chat');
-      if (window.location.hash && window.location.hash !== '#chat') {
-        window.location.hash = 'chat';
-      }
+      resetWorkspaceUi();
       setConnectionId((value) => value + 1);
     } catch (err) {
       if (epoch !== connectionEpochRef.current || abort.signal.aborted || (err as Error).name === 'AbortError') return;
@@ -235,33 +285,57 @@ export function ApiTokenShell() {
   }
 
   async function refreshExecutionStatus() {
-    if (!connectedToken || !session || !executionDebug.executionId || executionPolling) return;
-    if (!permits(session, 'agent:executions:read', `execution:${executionDebug.executionId}`)) {
+    const targetExecutionId = executionDebug.executionId;
+    if (!connectedToken || !session || !targetExecutionId || executionPolling) return;
+    if (!permits(session, 'agent:executions:read', `execution:${targetExecutionId}`)) {
       setExecutionPollError('This token lacks agent:executions:read permission to fetch execution snapshots.');
       return;
     }
 
     const epoch = connectionEpochRef.current;
+    const tokenAtStart = connectedToken;
+    if (
+      !epoch ||
+      epoch !== activeConnectionEpochRef.current ||
+      targetExecutionId !== activeExecutionIdRef.current
+    ) {
+      return;
+    }
+
+    const pollEpoch = ++pollEpochRef.current;
     pollAbortRef.current?.abort();
     const abort = new AbortController();
     pollAbortRef.current = abort;
     setExecutionPolling(true);
     setExecutionPollError('');
 
+    const isCurrentPoll = () =>
+      epoch !== 0 &&
+      epoch === connectionEpochRef.current &&
+      epoch === activeConnectionEpochRef.current &&
+      pollEpoch === pollEpochRef.current &&
+      !abort.signal.aborted &&
+      activeExecutionIdRef.current === targetExecutionId;
+
     try {
       const snapshot = await api<ExecutionStatusSnapshot>(
-        `/api/chat/executions/${executionDebug.executionId}`,
-        connectedToken,
+        `/api/chat/executions/${targetExecutionId}`,
+        tokenAtStart,
         { method: 'GET', signal: abort.signal },
-        { authMode: 'api-token', onUnauthorized: handleUnauthorized },
+        { authMode: 'api-token', onUnauthorized: (err) => disconnectForEpoch(epoch, err) },
       );
-      if (epoch !== connectionEpochRef.current || abort.signal.aborted) return;
+      if (!isCurrentPoll()) return;
+      if (snapshot.id && snapshot.id !== targetExecutionId) return;
       setExecutionPoll(snapshot);
     } catch (err) {
-      if (epoch !== connectionEpochRef.current || abort.signal.aborted || (err as Error).name === 'AbortError') return;
+      if (!isCurrentPoll() || (err as Error).name === 'AbortError') return;
       setExecutionPollError((err as Error).message || 'Unable to inspect execution status.');
     } finally {
-      if (epoch === connectionEpochRef.current) {
+      if (
+        epoch === connectionEpochRef.current &&
+        epoch === activeConnectionEpochRef.current &&
+        pollEpoch === pollEpochRef.current
+      ) {
         setExecutionPolling(false);
       }
     }
@@ -556,11 +630,17 @@ export function ApiTokenShell() {
         >
           <SpaceBetween size="xs">
             {AGENT_CAPABILITIES.map((cap) => {
-              const allowed = permits(session, cap.action);
+              const capability = evaluateAgentCapability(session, cap.action, {
+                models: availableModels,
+                selectedModelId,
+                conversationId: executionDebug.conversationId,
+                executionId: executionDebug.executionId,
+              });
+              const detail = capability.detail ? ` — ${capability.detail}` : '';
               return (
                 <div key={cap.action} data-testid={`capability-${cap.action}`}>
-                  <StatusIndicator type={allowed ? 'success' : 'stopped'}>
-                    {`${cap.action} — ${allowed ? 'Allowed' : 'Denied'} (${cap.description})`}
+                  <StatusIndicator type={capability.type}>
+                    {`${cap.action} — ${capability.label} (${cap.description})${detail}`}
                   </StatusIndicator>
                 </div>
               );
@@ -742,6 +822,7 @@ export function ApiTokenShell() {
                   session={session}
                   onUsageChange={handleUsageChange}
                   onExecutionStateChange={handleExecutionStateChange}
+                  onModelsChange={handleModelsChange}
                   onPreview={(value) => {
                     setArtifact(value);
                     setArtifactOpen(!!value);

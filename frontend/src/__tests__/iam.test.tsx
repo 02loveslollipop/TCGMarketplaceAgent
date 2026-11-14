@@ -2,7 +2,7 @@ import {render,screen,within,waitFor} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,expect,it,vi} from 'vitest';
 import {IAMAccess} from '../IAMAccess';
-import {permits} from '../iam';
+import {evaluateAgentCapability,permits} from '../iam';
 import type {Session} from '../contracts';
 const statement={effect:'Allow' as const,actions:['*'],resources:['*']};
 const session={id:'human',username:'Admin',role:'root',principal_type:'user',policy_statements:[statement]} as Session;
@@ -60,4 +60,49 @@ it('inherits a selected parent quota and confirms unsaved exit from the Cloudsca
  expect(screen.getByText('Discard unsaved changes?')).toBeInTheDocument();
  await user.click(screen.getByRole('button',{name:'Keep editing'}));
  expect(screen.getByDisplayValue('Child')).toBeInTheDocument();
+});
+
+it('evaluates resource-scoped capabilities with explicit Deny precedence',()=>{
+ const models=[{id:'review-model',enabled:true},{id:'blocked-model',enabled:true}];
+ const apiBase={...session,principal_type:'api' as const};
+
+ const modelAllow={...apiBase,policy_statements:[{effect:'Allow' as const,actions:['agent:models:invoke'],resources:['model:review-model']}]};
+ expect(evaluateAgentCapability(modelAllow,'agent:models:invoke',{models})).toMatchObject({
+  status:'scoped',type:'success',label:'Resource-scoped',detail:'Allowed for review-model',
+ });
+ expect(evaluateAgentCapability(modelAllow,'agent:models:invoke',{models:[]})).toMatchObject({
+  status:'scoped',type:'info',label:'Resource-scoped',detail:'Grants: model:review-model',
+ });
+
+ const partialDeny={...apiBase,policy_statements:[
+  {effect:'Allow' as const,actions:['agent:models:invoke'],resources:['model:review-model','model:blocked-model']},
+  {effect:'Deny' as const,actions:['agent:models:invoke'],resources:['model:blocked-model']},
+ ]};
+ const partial=evaluateAgentCapability(partialDeny,'agent:models:invoke',{models});
+ expect(partial).toMatchObject({status:'scoped',type:'success',label:'Resource-scoped'});
+ expect(partial.detail).toContain('Allowed for review-model');
+ expect(partial.detail).toContain('excluded by policy: blocked-model');
+
+ const exactDeny={...apiBase,policy_statements:[
+  {effect:'Allow' as const,actions:['agent:models:invoke'],resources:['model:review-model']},
+  {effect:'Deny' as const,actions:['agent:models:invoke'],resources:['model:review-model']},
+ ]};
+ expect(evaluateAgentCapability(exactDeny,'agent:models:invoke',{models})).toMatchObject({status:'denied',label:'Denied'});
+
+ const wildcardThenModelDeny={...apiBase,policy_statements:[
+  {effect:'Allow' as const,actions:['agent:*'],resources:['*']},
+  {effect:'Deny' as const,actions:['agent:models:invoke'],resources:['model:*']},
+ ]};
+ expect(evaluateAgentCapability(wildcardThenModelDeny,'agent:models:invoke',{models})).toMatchObject({status:'denied',label:'Denied'});
+
+ const execScoped={...apiBase,policy_statements:[{effect:'Allow' as const,actions:['agent:executions:read'],resources:['execution:exec-1']}]};
+ expect(evaluateAgentCapability(execScoped,'agent:executions:read',{executionId:'exec-1'})).toMatchObject({status:'scoped',type:'success',label:'Resource-scoped'});
+ expect(evaluateAgentCapability(execScoped,'agent:executions:read',{executionId:'exec-2'})).toMatchObject({status:'scoped',type:'warning',label:'Resource-scoped'});
+
+ const convExcluded={...apiBase,policy_statements:[
+  {effect:'Allow' as const,actions:['agent:conversations:write'],resources:['conversation:conv-*']},
+  {effect:'Deny' as const,actions:['agent:conversations:write'],resources:['conversation:conv-locked']},
+ ]};
+ expect(evaluateAgentCapability(convExcluded,'agent:conversations:write',{conversationId:'conv-open'})).toMatchObject({status:'scoped',type:'success'});
+ expect(evaluateAgentCapability(convExcluded,'agent:conversations:write',{conversationId:'conv-locked'})).toMatchObject({status:'scoped',type:'warning'});
 });

@@ -35,6 +35,7 @@ export interface ChatProps {
   session?: Session | null;
   onUsageChange?: (usage: DailyUsage | null, usageError: string) => void;
   onExecutionStateChange?: (info: ExecutionDebugInfo) => void;
+  onModelsChange?: (models: Model[], selectedModelId: string) => void;
 }
 
 interface HistoryRow {role:string;created_at?:string;content:{images?:ImageContext[];text?:string;type?:AgentEvent['type'];data?:unknown;execution_id?:string;decision?:Decision}}
@@ -45,7 +46,7 @@ const starters=[
 ];
 const agentAvatar=(loading=false)=><Avatar color="gen-ai" iconName="gen-ai" loading={loading} ariaLabel="Deck agent, generative AI assistant" tooltipText="Deck agent"/>;
 
-export function Chat({token,onPreview,navigationContainer,onConversationSelected,authMode,onUnauthorized,session,onUsageChange,onExecutionStateChange}:ChatProps) {
+export function Chat({token,onPreview,navigationContainer,onConversationSelected,authMode,onUnauthorized,session,onUsageChange,onExecutionStateChange,onModelsChange}:ChatProps) {
   const transport=useClientTransport();
   const effectiveAuthMode=authMode??transport.authMode;
   const effectiveOnUnauthorized=onUnauthorized??transport.onUnauthorized;
@@ -70,12 +71,13 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
   const [localArtifact,setLocalArtifact]=useState<ChatArtifact|null>(null),[jumpVisible,setJumpVisible]=useState(false),[announcement,setAnnouncement]=useState('');
   const [renameTarget,setRenameTarget]=useState<Conversation|null>(null),[renameTitle,setRenameTitle]=useState(''),[renaming,setRenaming]=useState(false),[renameError,setRenameError]=useState('');
   const [deleteTarget,setDeleteTarget]=useState<Conversation|null>(null),[deleting,setDeleting]=useState(false),[deleteError,setDeleteError]=useState('');
-  const controller=useRef<AbortController|null>(null),running=useRef(false),runId=useRef(0),alive=useRef(true),entryId=useRef(0);
+  const controller=useRef<AbortController|null>(null),teardownController=useRef<AbortController|null>(null),running=useRef(false),runId=useRef(0),alive=useRef(true),entryId=useRef(0);
   const currentToken=useRef(token);currentToken.current=token;
   const onUsageChangeRef=useRef(onUsageChange);onUsageChangeRef.current=onUsageChange;
   const onExecutionStateChangeRef=useRef(onExecutionStateChange);onExecutionStateChangeRef.current=onExecutionStateChange;
+  const onModelsChangeRef=useRef(onModelsChange);onModelsChangeRef.current=onModelsChange;
   const log=useRef<HTMLDivElement>(null),prompt=useRef<PromptInputProps.Ref>(null),atBottom=useRef(true),previewTrigger=useRef<HTMLElement|null>(null);
-  function isStale(reqToken:string){return !alive.current||(isApiTokenMode&&currentToken.current!==reqToken);}
+  function isStale(reqToken:string){return !alive.current||!!teardownController.current?.signal.aborted||(isApiTokenMode&&currentToken.current!==reqToken);}
   function reportExecution(info:ExecutionDebugInfo){onExecutionStateChangeRef.current?.(info);}
   function entry(event:ChatEvent,at?:string):ChatEntry{return {...event,id:`chat-event-${++entryId.current}`,at};}
   function append(event:ChatEvent){const row=entry(event);setEvents(previous=>{if(event.type==='thinking'||event.type==='tool'){const currentTurn=previous.map(item=>item.type).lastIndexOf('user');const existing=previous.findIndex((item,index)=>index>currentTurn&&item.type===event.type&&'id' in item.data&&item.data.id===event.data.id);if(existing>=0)return previous.map((item,index)=>index===existing?{...row,id:item.id}:item);}return [...previous,row];});}
@@ -85,7 +87,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
       const msg='Daily usage is unavailable because this API token lacks agent:usage:read. Server-side limits still apply.';
       setUsage(null);setUsageError(msg);onUsageChangeRef.current?.(null,msg);return;
     }
-    void api<DailyUsage>('/api/chat/usage',reqToken,{},authOptions).then(value=>{
+    void api<DailyUsage>('/api/chat/usage',reqToken,{signal:teardownController.current?.signal},authOptions).then(value=>{
       if(!value||!['daily_token_limit','total_tokens','remaining_tokens'].every(key=>typeof (value as unknown as Record<string,unknown>)[key]==='number'))throw new Error('Invalid usage response');
       if(!isStale(reqToken)){setUsage(value);setUsageError('');onUsageChangeRef.current?.(value,'');}
     }).catch(err=>{
@@ -106,7 +108,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
       return;
     }
     try{
-      const rows=await api<Conversation[]>('/api/chat/conversations',reqToken,{},authOptions);
+      const rows=await api<Conversation[]>('/api/chat/conversations',reqToken,{signal:teardownController.current?.signal},authOptions);
       if(!isStale(reqToken)){setConversations(rows);setHistoryError('');setHistoryDenied(false);}
     }catch(err){
       if(isStale(reqToken))return;
@@ -118,8 +120,13 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
   }
   useEffect(()=>{
     alive.current=true;
-    return ()=>{alive.current=false;controller.current?.abort();};
+    const teardown=new AbortController();
+    teardownController.current=teardown;
+    return ()=>{alive.current=false;teardown.abort();controller.current?.abort();};
   },[]);
+  useEffect(()=>{
+    onModelsChangeRef.current?.(models,modelId);
+  },[models,modelId]);
   useEffect(()=>{
     let active=true;
     const reqToken=token;
@@ -128,7 +135,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
       setModels([]);setModelId('');setModelsDenied(true);setModelsLoading(false);
     }else{
       setModelsDenied(false);
-      void api<Model[]>('/api/chat/models',reqToken,{},authOptions).then(items=>{
+      void api<Model[]>('/api/chat/models',reqToken,{signal:teardownController.current?.signal},authOptions).then(items=>{
         if(active&&!isStale(reqToken)){setModels(items);setModelId(previous=>items.some(item=>item.id===previous)?previous:items[0]?.id||'');}
       }).catch(err=>{
         if(!active||isStale(reqToken))return;
@@ -148,12 +155,12 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     if(event.type==='done'&&event.data.status!=='waiting'){reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'complete',lastEventType:'done'});}
     append(event);
   }
-  async function run(path:string,body:unknown,restoreQuestion:Question|null=null){
-    if(running.current)return;
+  async function run(path:string,body:unknown,restoreQuestion:Question|null=null,initialExecutionId:string=execution){
+    if(running.current||!alive.current||teardownController.current?.signal.aborted)return;
     const reqToken=currentToken.current;
     const id=++runId.current;running.current=true;setError('');setBusy(true);setQuestion(null);
     const abort=new AbortController();controller.current=abort;let received=false,terminal=false,incompleteStream=false;
-    const tracker={executionId:execution,conversationId:conversation};
+    const tracker={executionId:initialExecutionId,conversationId:conversation};
     reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'streaming'});
     try{
       await stream(path,reqToken,body,event=>{
@@ -192,8 +199,8 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     catch(error){if(alive.current)setImageError((error as Error).message);}
     finally{readingImages.current=false;if(alive.current)setAttaching(false);}
   }
-  function send(){if((!text.trim()&&!images.length)||running.current||historyLoading||attaching||!modelId||question||quotaBlocked||!canCreateExecution)return;const request=text.trim();setAnnouncement('Request sent. The agent is working.');atBottom.current=true;append({type:'user',data:{text:request,images}});setText('');setImages([]);setImageError('');void run('/api/chat/executions',{text:request,images,model_id:modelId,conversation_id:conversation});}
-  function decide(decision:Decision){if(running.current||historyLoading||!question||!canResumeExecution(execution))return;const current=question;setAnnouncement('Decision submitted. The agent is continuing.');atBottom.current=true;append({type:'user',data:{text:decisionText(decision,current),decision}});void run(`/api/chat/executions/${execution}/resume`,decision,current);prompt.current?.focus();}
+  function send(){if((!text.trim()&&!images.length)||running.current||historyLoading||attaching||!modelId||question||quotaBlocked||!canCreateExecution)return;const request=text.trim();setExecution('');setAnnouncement('Request sent. The agent is working.');atBottom.current=true;append({type:'user',data:{text:request,images}});setText('');setImages([]);setImageError('');void run('/api/chat/executions',{text:request,images,model_id:modelId,conversation_id:conversation},null,'');}
+  function decide(decision:Decision){if(running.current||historyLoading||!question||!canResumeExecution(execution))return;const current=question;setAnnouncement('Decision submitted. The agent is continuing.');atBottom.current=true;append({type:'user',data:{text:decisionText(decision,current),decision}});void run(`/api/chat/executions/${execution}/resume`,decision,current,execution);prompt.current?.focus();}
   function stop(){if(!running.current||controller.current?.signal.aborted)return;controller.current?.abort();append({type:'stopped',data:{message:'You stopped this execution.'}});setAnnouncement('Execution stopped. You can edit and reuse the request.');}
   function closePreview(){setLocalArtifact(null);onPreview?.(null);}
   function newConversation(){if(locked)return;setConversation(undefined);setEvents([]);setImages([]);setImageError('');setQuestion(null);setExecution('');setError('');reportExecution({conversationId:undefined,executionId:'',status:'idle'});closePreview();atBottom.current=true;setAnnouncement('New conversation started.');onConversationSelected?.();prompt.current?.focus();}
@@ -202,7 +209,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     const reqToken=currentToken.current;
     setHistoryLoading(true);setError('');
     try{
-      const history=await api<HistoryRow[]>(`/api/chat/conversations/${id}`,reqToken,{},authOptions);
+      const history=await api<HistoryRow[]>(`/api/chat/conversations/${id}`,reqToken,{signal:teardownController.current?.signal},authOptions);
       if(isStale(reqToken))return;
       let previousQuestion:Question|null=null;
       const restored=history.flatMap(row=>{
@@ -243,9 +250,11 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
           executionWarning='Conversation loaded, but this token lacks agent:executions:read permission to verify whether the waiting execution can be resumed.';
         }else{
           try{
-            const result=await api<{status:string}>(`/api/chat/executions/${last.content.execution_id}`,reqToken,{},authOptions);
+            const result=await api<{status:string}>(`/api/chat/executions/${last.content.execution_id}`,reqToken,{signal:teardownController.current?.signal},authOptions);
+            if(isStale(reqToken))return;
             if(result.status==='waiting'){waitingQuestion=last.content.data as Question;waitingExecution=last.content.execution_id;nextStatus='waiting';}
           }catch(execErr){
+            if(isStale(reqToken))return;
             if(execErr instanceof ApiError&&execErr.status===403){
               executionWarning=execErr.message||'Conversation loaded, but inspecting the waiting execution was denied (403).';
             }else{
@@ -264,23 +273,27 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
   }
   async function handleRename(){
     if(!renameTarget||!renameTitle.trim()||!canRenameConversation(renameTarget.id))return;
+    const reqToken=currentToken.current;
     setRenaming(true);setRenameError('');
     try{
-      const updated=await api<Conversation>(`/api/chat/conversations/${renameTarget.id}`,token,{method:'PUT',body:JSON.stringify({title:renameTitle.trim()})},authOptions);
+      const updated=await api<Conversation>(`/api/chat/conversations/${renameTarget.id}`,reqToken,{method:'PUT',body:JSON.stringify({title:renameTitle.trim()}),signal:teardownController.current?.signal},authOptions);
+      if(isStale(reqToken))return;
       setConversations(previous=>previous.map(item=>item.id===renameTarget.id?{...item,title:updated.title}:item));
       setRenameTarget(null);
-    }catch(err){setRenameError((err as Error).message);}finally{setRenaming(false);}
+    }catch(err){if(!isStale(reqToken))setRenameError((err as Error).message);}finally{if(!isStale(reqToken))setRenaming(false);}
   }
   async function handleDelete(){
     if(!deleteTarget||!canDeleteConversation(deleteTarget.id))return;
+    const reqToken=currentToken.current;
     setDeleting(true);setDeleteError('');
     try{
-      await api<{status:string}>(`/api/chat/conversations/${deleteTarget.id}`,token,{method:'DELETE'},authOptions);
+      await api<{status:string}>(`/api/chat/conversations/${deleteTarget.id}`,reqToken,{method:'DELETE',signal:teardownController.current?.signal},authOptions);
+      if(isStale(reqToken))return;
       const targetId=deleteTarget.id;
       setConversations(previous=>previous.filter(item=>item.id!==targetId));
       if(conversation===targetId)newConversation();
       setDeleteTarget(null);
-    }catch(err){setDeleteError((err as Error).message);}finally{setDeleting(false);}
+    }catch(err){if(!isStale(reqToken))setDeleteError((err as Error).message);}finally{if(!isStale(reqToken))setDeleting(false);}
   }
   function openArtifact(artifact:ChatArtifact){previewTrigger.current=document.activeElement as HTMLElement;if(onPreview)onPreview(artifact);else setLocalArtifact(artifact);}
   function reuse(request:string,context:ImageContext[]=[]){if(locked||question)return;setText(request);setImages(context);setImageError('');prompt.current?.focus();setAnnouncement('Request copied to the composer. Review it before sending.');}

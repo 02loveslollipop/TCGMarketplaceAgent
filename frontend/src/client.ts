@@ -122,7 +122,7 @@ export async function api<T>(
 
   if (!response.ok) {
     const apiError = await parseApiError(response);
-    if (apiTokenMode && response.status === 401) {
+    if (apiTokenMode && response.status === 401 && !options.signal?.aborted) {
       authOptions.onUnauthorized?.(apiError);
     }
     throw apiError;
@@ -175,7 +175,7 @@ export async function stream(
 
   if (!response.ok) {
     const apiError = await parseApiError(response);
-    if (apiTokenMode && response.status === 401) {
+    if (apiTokenMode && response.status === 401 && !signal?.aborted) {
       authOptions.onUnauthorized?.(apiError);
     }
     throw apiError;

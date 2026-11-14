@@ -664,4 +664,316 @@ describe('API token chat test client', () => {
     await Promise.resolve();
     expect(within(document.body).queryByTestId('api-principal-banner')).not.toBeInTheDocument();
   });
+
+  it('keeps replacement principal B connected when a delayed request from disconnected principal A returns 401 and still disconnects on current 401', async () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => { resolve = res; });
+      return { promise, resolve };
+    }
+
+    const aExecDeferred = deferred<Response>();
+    let aExecSignal: AbortSignal | undefined;
+    let aExecStarted = false;
+    const authLeakCalls: string[] = [];
+    const refreshSpy = vi.fn(async () => 'human-jwt-must-not-run');
+    registerTokenRefresher(refreshSpy);
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const auth = new Headers(init?.headers).get('Authorization') || '';
+      if (url.includes('/api/auth/refresh') || url.includes('/api/auth/logout')) {
+        authLeakCalls.push(url);
+      }
+      if (url === '/api/auth/session') {
+        if (auth === `Bearer ${TOKEN_A}`) {
+          return jsonResponse(makeApiSession({ id: 'principal-a', username: 'principal-a' }));
+        }
+        return jsonResponse(makeApiSession({ id: 'principal-b', username: 'principal-b' }));
+      }
+      if (url === '/api/chat/usage') {
+        return jsonResponse({
+          daily_token_limit: 5000,
+          total_tokens: 100,
+          remaining_tokens: 4900,
+          unverified_usage: false,
+          in_progress: false,
+        });
+      }
+      if (url === '/api/chat/conversations') return jsonResponse([]);
+      if (url === '/api/chat/models') {
+        return jsonResponse([{ id: 'm-gpt', label: 'GPT', provider: 'openai', api_id: 'gpt-6', enabled: true }]);
+      }
+      if (url === '/api/chat/executions' && init?.method === 'POST') {
+        if (auth === `Bearer ${TOKEN_A}`) {
+          aExecStarted = true;
+          aExecSignal = init?.signal ?? undefined;
+          return aExecDeferred.promise;
+        }
+        return jsonResponse({ detail: 'Principal B revoked' }, 401);
+      }
+      return jsonResponse({});
+    });
+
+    const user = userEvent.setup();
+    render(<ApiTokenShell />);
+
+    await user.type(screen.getByTestId('api-token-input'), TOKEN_A);
+    await user.click(screen.getByTestId('api-token-connect-button'));
+    expect(await screen.findByTestId('api-principal-banner')).toHaveTextContent('principal-a');
+
+    await user.type(await screen.findByTestId('chat-prompt-textarea'), 'Delayed A request');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await waitFor(() => expect(aExecStarted).toBe(true));
+
+    await user.click(screen.getByRole('button', { name: 'Disconnect' }));
+    expect(aExecSignal?.aborted).toBe(true);
+
+    await user.type(await screen.findByTestId('api-token-input'), TOKEN_B);
+    await user.click(screen.getByTestId('api-token-connect-button'));
+    expect(await screen.findByTestId('api-principal-banner')).toHaveTextContent('principal-b');
+
+    // Delayed 401 from disconnected principal A must be ignored even after A is gone and B is active
+    aExecDeferred.resolve(jsonResponse({ detail: 'Principal A expired' }, 401));
+    await waitFor(() => {
+      expect(screen.getByTestId('api-principal-banner')).toHaveTextContent('principal-b');
+    });
+    expect(screen.queryByTestId('api-token-connect-error')).not.toBeInTheDocument();
+
+    // Genuine 401 for current principal B still disconnects without JWT refresh or cookie fallback
+    await user.type(await screen.findByTestId('chat-prompt-textarea'), 'Current B 401');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    const errBanner = await screen.findByTestId('api-token-connect-error');
+    expect(errBanner).toHaveTextContent('Disconnected because the API token was rejected (401)');
+    expect(errBanner).toHaveTextContent('Principal B revoked');
+    expect(refreshSpy).not.toHaveBeenCalled();
+    expect(authLeakCalls).toEqual([]);
+  });
+
+  it('ignores stale 401 after disconnecting and reconnecting with the same API token', async () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => { resolve = res; });
+      return { promise, resolve };
+    }
+
+    const firstConnDeferred = deferred<Response>();
+    let execCount = 0;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/auth/session') {
+        return jsonResponse(makeApiSession({ id: 'principal-a', username: 'principal-a' }));
+      }
+      if (url === '/api/chat/usage') {
+        return jsonResponse({
+          daily_token_limit: 5000,
+          total_tokens: 0,
+          remaining_tokens: 5000,
+          unverified_usage: false,
+          in_progress: false,
+        });
+      }
+      if (url === '/api/chat/conversations') return jsonResponse([]);
+      if (url === '/api/chat/models') {
+        return jsonResponse([{ id: 'm-gpt', label: 'GPT', provider: 'openai', api_id: 'gpt-6', enabled: true }]);
+      }
+      if (url === '/api/chat/executions' && init?.method === 'POST') {
+        execCount += 1;
+        return firstConnDeferred.promise;
+      }
+      return jsonResponse({});
+    });
+
+    const user = userEvent.setup();
+    render(<ApiTokenShell />);
+
+    await user.type(screen.getByTestId('api-token-input'), TOKEN_A);
+    await user.click(screen.getByTestId('api-token-connect-button'));
+    expect(await screen.findByTestId('api-principal-banner')).toHaveTextContent('principal-a');
+
+    await user.type(await screen.findByTestId('chat-prompt-textarea'), 'First generation request');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await waitFor(() => expect(execCount).toBe(1));
+
+    await user.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await user.type(await screen.findByTestId('api-token-input'), TOKEN_A);
+    await user.click(screen.getByTestId('api-token-connect-button'));
+    expect(await screen.findByTestId('api-principal-banner')).toHaveTextContent('principal-a');
+
+    firstConnDeferred.resolve(jsonResponse({ detail: 'Previous connection generation rejected' }, 401));
+    await waitFor(() => {
+      expect(screen.getByTestId('api-principal-banner')).toHaveTextContent('principal-a');
+    });
+    expect(screen.queryByTestId('api-token-connect-error')).not.toBeInTheDocument();
+  });
+
+  it('ignores late execution A poll responses after execution B starts and clears polling state for B', async () => {
+    function deferred<T>() {
+      let resolve!: (value: T) => void;
+      const promise = new Promise<T>((res) => { resolve = res; });
+      return { promise, resolve };
+    }
+
+    const poll1Deferred = deferred<Response>();
+    const poll2Deferred = deferred<Response>();
+    let execCount = 0;
+    let poll1Started = false;
+    let poll1Signal: AbortSignal | undefined;
+    let poll2Started = false;
+
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      if (url === '/api/auth/session') return jsonResponse(makeApiSession());
+      if (url === '/api/chat/usage') {
+        return jsonResponse({
+          daily_token_limit: 5000,
+          total_tokens: 100,
+          remaining_tokens: 4900,
+          unverified_usage: false,
+          in_progress: false,
+        });
+      }
+      if (url === '/api/chat/conversations') return jsonResponse([]);
+      if (url === '/api/chat/models') {
+        return jsonResponse([{ id: 'm-gpt', label: 'GPT', provider: 'openai', api_id: 'gpt-6', enabled: true }]);
+      }
+      if (url === '/api/chat/executions' && init?.method === 'POST') {
+        execCount += 1;
+        const sse = makeControlledSse();
+        sse.send('execution', { id: `run-${execCount}`, conversation_id: 'conv-1' });
+        sse.send('result', SAMPLE_RESULT);
+        sse.send('done', { status: 'complete' });
+        sse.close();
+        return sse.response;
+      }
+      if (url === '/api/chat/executions/run-1') {
+        poll1Started = true;
+        poll1Signal = init?.signal ?? undefined;
+        return poll1Deferred.promise;
+      }
+      if (url === '/api/chat/executions/run-2') {
+        poll2Started = true;
+        return poll2Deferred.promise;
+      }
+      return jsonResponse({});
+    });
+
+    const user = userEvent.setup();
+    render(<ApiTokenShell />);
+
+    await user.type(screen.getByTestId('api-token-input'), TOKEN_A);
+    await user.click(screen.getByTestId('api-token-connect-button'));
+
+    await user.type(await screen.findByTestId('chat-prompt-textarea'), 'First run');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await waitFor(() => expect(screen.getByTestId('api-principal-banner')).toHaveTextContent('Exec: run-1'));
+
+    await user.click(screen.getByRole('button', { name: 'Principal and debugging' }));
+    await user.click(screen.getByTestId('refresh-execution-status-button'));
+    await waitFor(() => expect(poll1Started).toBe(true));
+
+    await user.type(screen.getByTestId('chat-prompt-textarea'), 'Second run');
+    await user.click(screen.getByRole('button', { name: 'Send request' }));
+    await waitFor(() => expect(screen.getByTestId('api-principal-banner')).toHaveTextContent('Exec: run-2'));
+    expect(poll1Signal?.aborted).toBe(true);
+
+    poll1Deferred.resolve(jsonResponse({
+      id: 'run-1',
+      conversation_id: 'conv-1',
+      status: 'failed',
+      events: [],
+    }));
+    await waitFor(() => {
+      expect(screen.getByTestId('api-principal-banner')).toHaveTextContent('Exec: run-2');
+    });
+    expect(screen.queryByText('failed')).not.toBeInTheDocument();
+
+    // Refreshing run-2 is unblocked because switching executions cleared run-1's loading state
+    await user.click(screen.getByTestId('refresh-execution-status-button'));
+    await waitFor(() => expect(poll2Started).toBe(true));
+    poll2Deferred.resolve(jsonResponse({
+      id: 'run-2',
+      conversation_id: 'conv-1',
+      status: 'complete',
+      events: [],
+    }));
+    expect(await screen.findByText('complete')).toBeInTheDocument();
+  });
+
+  it('evaluates concrete-resource capabilities and explicit Deny rules in the inspector drawer', async () => {
+    vi.spyOn(globalThis, 'fetch').mockImplementation(async (input, init) => {
+      const url = String(input);
+      const auth = new Headers(init?.headers).get('Authorization') || '';
+      if (url === '/api/auth/session') {
+        if (auth === `Bearer ${TOKEN_A}`) {
+          return jsonResponse(makeApiSession({
+            policy_statements: [
+              { effect: 'Allow', actions: ['agent:models:list', 'agent:executions:create'], resources: ['*'] },
+              {
+                effect: 'Allow',
+                actions: ['agent:models:invoke'],
+                resources: ['model:review-model', 'model:blocked-model'],
+              },
+              {
+                effect: 'Deny',
+                actions: ['agent:models:invoke'],
+                resources: ['model:blocked-model'],
+              },
+            ],
+          }));
+        }
+        return jsonResponse(makeApiSession({
+          id: 'principal-denied-models',
+          username: 'no-model-bot',
+          policy_statements: [
+            { effect: 'Allow', actions: ['agent:*'], resources: ['*'] },
+            { effect: 'Deny', actions: ['agent:models:invoke'], resources: ['model:*'] },
+          ],
+        }));
+      }
+      if (url === '/api/chat/models') {
+        return jsonResponse([
+          { id: 'review-model', label: 'Review Model', provider: 'openai', api_id: 'gpt-6', enabled: true },
+          { id: 'blocked-model', label: 'Blocked Model', provider: 'openai', api_id: 'gpt-6.1', enabled: true },
+        ]);
+      }
+      if (url === '/api/chat/conversations') return jsonResponse([]);
+      if (url === '/api/chat/usage') {
+        return jsonResponse({
+          daily_token_limit: 5000,
+          total_tokens: 0,
+          remaining_tokens: 5000,
+          unverified_usage: false,
+          in_progress: false,
+        });
+      }
+      return jsonResponse({});
+    });
+
+    const user = userEvent.setup();
+    render(<ApiTokenShell />);
+
+    await user.type(screen.getByTestId('api-token-input'), TOKEN_A);
+    await user.click(screen.getByTestId('api-token-connect-button'));
+    expect(await screen.findByTestId('api-principal-banner')).toBeInTheDocument();
+
+    await user.click(screen.getByRole('button', { name: 'Principal and debugging' }));
+    const modelCap = await screen.findByTestId('capability-agent:models:invoke');
+    await waitFor(() => {
+      expect(modelCap).toHaveTextContent('Resource-scoped');
+      expect(modelCap).toHaveTextContent('review-model');
+      expect(modelCap).toHaveTextContent('excluded by policy: blocked-model');
+    });
+    expect(modelCap).not.toHaveTextContent('Denied');
+    expect(screen.getByTestId('capability-agent:executions:create')).toHaveTextContent('Allowed');
+    expect(screen.getByTestId('capability-agent:usage:read')).toHaveTextContent('Denied');
+
+    // Explicit Deny on model:* overrides agent:* wildcard Allow
+    await user.click(screen.getByRole('button', { name: 'Disconnect' }));
+    await user.type(await screen.findByTestId('api-token-input'), TOKEN_B);
+    await user.click(screen.getByTestId('api-token-connect-button'));
+    await user.click(await screen.findByRole('button', { name: 'Principal and debugging' }));
+    expect(await screen.findByTestId('capability-agent:models:invoke')).toHaveTextContent('Denied');
+  });
 });
