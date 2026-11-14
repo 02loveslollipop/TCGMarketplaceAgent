@@ -33,13 +33,17 @@ existing application. Python3.11+ and Docker are sufficient on the host; Node an
 frontend build dependencies run inside Docker.
 
 ```sh
-python -m scripts.api_tester up --token "$TCG_API_TOKEN"
+python -m scripts.api_tester up --default --token "$TCG_API_TOKEN"
 # Open http://127.0.0.1:8090/api-test/
 python -m scripts.api_tester down
 ```
 
-The defaults are `https://api.auth.tcg-marketplace.02labs.me` and
-`https://api.chat.tcg-marketplace.02labs.me`. Base URLs point at the service root,
+`--default` selects the deployed Heroku APIs at
+`https://api.auth.tcg-marketplace.02labs.me` and
+`https://api.chat.tcg-marketplace.02labs.me`. Omitting both the flag and custom
+URLs keeps the same defaults. Use `--auth-url` and `--chat-url` instead of
+`--default` to select custom services; combining them is rejected to avoid
+ambiguous routing. Base URLs point at the service root,
 or include `/api/auth` and `/api/chat` when using a gateway. The container proxies
 auth session introspection and agent endpoints, so no CORS changes are required.
 It strips cookies in both directions, never supplies a server-side fallback
@@ -49,7 +53,7 @@ when the browser disconnects. TLS verification remains enabled.
 Use `--token-stdin` to keep the token out of process arguments as well:
 
 ```sh
-printf '%s\n' "$TCG_API_TOKEN" | python -m scripts.api_tester up --token-stdin
+printf '%s\n' "$TCG_API_TOKEN" | python -m scripts.api_tester up --default --token-stdin
 ```
 
 The launcher transfers the token through `docker exec -i` stdin into a mode0600

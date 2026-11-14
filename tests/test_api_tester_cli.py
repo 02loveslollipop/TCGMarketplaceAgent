@@ -61,3 +61,26 @@ def test_invalid_tokens_do_not_reach_docker(monkeypatch,arguments):
     runner=Mock();monkeypatch.setattr(api_tester,'docker',runner)
     assert api_tester.main(['up',*arguments])==1
     runner.assert_not_called()
+
+
+@pytest.mark.parametrize('selectors,auth,chat',[
+    ([],api_tester.AUTH_URL,api_tester.CHAT_URL),
+    (['--default'],api_tester.AUTH_URL,api_tester.CHAT_URL),
+    (['--auth-url','http://auth:8000','--chat-url','http://orchestrator:8000'],
+     'http://auth:8000','http://orchestrator:8000'),
+])
+def test_default_and_custom_api_selection(monkeypatch,selectors,auth,chat):
+    launch=Mock();monkeypatch.setattr(api_tester,'launch',launch)
+    assert api_tester.main(['up','--token',TOKEN,*selectors])==0
+    args=launch.call_args.args[0]
+    assert args.auth_url==auth
+    assert args.chat_url==chat
+
+
+@pytest.mark.parametrize('custom_flag',['--auth-url','--chat-url'])
+def test_default_rejects_conflicting_custom_api_urls(monkeypatch,custom_flag):
+    launch=Mock();monkeypatch.setattr(api_tester,'launch',launch)
+    with pytest.raises(SystemExit) as error:
+        api_tester.main(['up','--token',TOKEN,'--default',custom_flag,'http://custom:8000'])
+    assert error.value.code==2
+    launch.assert_not_called()

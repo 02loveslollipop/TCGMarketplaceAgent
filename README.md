@@ -7,19 +7,17 @@ A purchasing and deck-building assistant built with **LangGraph**, **LangChain**
 > [!IMPORTANT]
 > This is an independent research demonstration and proof of concept, **not affiliated with or endorsed by Nintendo, Creatures Inc., GAME FREAK, or The Pokémon Company**. Marketplace listings are retrieved via logged-out, read-only extraction through Apify without bypassing authentication or protection mechanisms. Source data and game assets remain property of their respective owners.
 
-## Try the demo
+## Test with an API token
 
-Open **[TCG Marketplace Chat](https://chat.tcg-marketplace.02labs.me/)** · **[Administration Portal](https://admin.tcg-marketplace.02labs.me/)**.
+Use an existing API-principal token to launch the Docker API tester against the deployed Heroku services:
 
-<!-- TODO: Replace mock credentials and temporary URLs with verified production credentials once final deployment is active -->
-| Email / Username | Password | Second Factor (2FA) | Daily Shared Allowance | Role |
-|---|---|---|---|---|
-| `demo@02labs.me` | `demo1234` | Authenticator App (TOTP) / Security Key (WebAuthn) | 50,000 input/output tokens | User |
-| `admin@02labs.me` | `admin1234` | Authenticator App (TOTP) / Security Key (WebAuthn) | 200,000 input/output tokens | Administrator |
+```bash
+python -m scripts.api_tester up --default --token "$TCG_API_TOKEN"
+```
 
-*Note: For testing against local development stacks, 2FA can be configured with an authenticator app (e.g. Google Authenticator) or a WebAuthn/FIDO2 passkey. In local mode, `LOCAL_DEV_PASSWORD_ONLY=true` may also be enabled to bypass second-factor challenges during development.*
+Open [http://127.0.0.1:8090/api-test/](http://127.0.0.1:8090/api-test/). The tester authenticates with the token and does not require an interactive password or 2FA sign-in. An administrator must issue the token with agent-testing permissions; its role and quota still apply. See [deployment instructions](deploy/README.md#standalone-api-tester-docker-deployment) for setup and custom API endpoints.
 
-### Example prompts to try
+### Example prompts for the API tester
 
 - **Deck search & budgeting**: *"I need to buy the cards for an M Lucario deck. Check two suppliers and prepare a budget in USD."*
 - **Collection curation**: *"I want a Gardevoir collection with a product budget of 150000 JPY. English, Near Mint, one per printing. Prefer full-art cards, including non-secret full arts; older cards are welcome. Research candidates and prepare a buying estimate."*
@@ -125,7 +123,7 @@ LOCAL_DEV_PASSWORD_ONLY=true docker compose up -d --build auth
 To test existing services without starting the full stack or provisioning a database:
 
 ```bash
-python -m scripts.api_tester up --token "$TCG_API_TOKEN"
+python -m scripts.api_tester up --default --token "$TCG_API_TOKEN"
 ```
 
 Open [http://127.0.0.1:8090/api-test/](http://127.0.0.1:8090/api-test/). The command builds the standalone image, starts a local container, and connects once using the supplied API-principal token. It defaults to the deployed auth/chat services; use `--auth-url` and `--chat-url` to choose other services. Stop it with `python -m scripts.api_tester down`. See [standalone API tester deployment](deploy/README.md#standalone-api-tester-docker-deployment) for stdin input, local-stack networking and lifecycle details.

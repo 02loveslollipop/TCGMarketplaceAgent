@@ -103,14 +103,20 @@ def main(argv=None):
     up.add_argument('--name', type=resource_name, default=DEFAULT_NAME)
     up.add_argument('--image', default=DEFAULT_IMAGE)
     up.add_argument('--port', type=port_number, default=8090)
-    up.add_argument('--auth-url', type=api_url, default=AUTH_URL, help='Auth service base URL, optionally including /api/auth for a gateway.')
-    up.add_argument('--chat-url', type=api_url, default=CHAT_URL, help='Chat service base URL, optionally including /api/chat for a gateway.')
+    up.add_argument('--default', action='store_true', help='Use the deployed Heroku auth/chat APIs (also used when no URLs are supplied). Cannot be combined with custom API URLs.')
+    up.add_argument('--auth-url', type=api_url, help='Auth service base URL, optionally including /api/auth for a gateway.')
+    up.add_argument('--chat-url', type=api_url, help='Chat service base URL, optionally including /api/chat for a gateway.')
     up.add_argument('--network', help='Existing Docker network for local API services.')
     up.add_argument('--build-network', help='Docker build network, if required by this host.')
     up.add_argument('--no-build', action='store_true', help='Use the existing image.')
     down = sub.add_parser('down', help='Remove only the named API tester container.')
     down.add_argument('--name', type=resource_name, default=DEFAULT_NAME)
     args = parser.parse_args(argv)
+    if args.command == 'up':
+        if args.default and (args.auth_url is not None or args.chat_url is not None):
+            parser.error('--default cannot be combined with --auth-url or --chat-url.')
+        args.auth_url = args.auth_url or AUTH_URL
+        args.chat_url = args.chat_url or CHAT_URL
     try:
         if args.command == 'up':
             launch(args)

@@ -78,7 +78,7 @@ jobs:
           docker build -f deploy/api-tester.Dockerfile -t tcg-api-tester:ci .
           trap 'python -m scripts.api_tester down --name tcg-api-tester-ci' EXIT
           printf '%s\n' 'synthetic-ci-launch-token' | python -m scripts.api_tester up \
-            --token-stdin --no-build --image tcg-api-tester:ci \
+            --default --token-stdin --no-build --image tcg-api-tester:ci \
             --name tcg-api-tester-ci --port 18997
           python - <<'PY'
           import json
