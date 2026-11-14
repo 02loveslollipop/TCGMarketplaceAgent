@@ -322,3 +322,20 @@ flowchart LR
 ### Custom IAM and programmatic testing
 
 See [IAM roles and managed API tokens](docs/security/iam.md) for inherited policies, explicit Deny, per-principal quotas, the admin token flow, CLI usage and the additive migration.
+
+### API-token chat test client (`/api-test/`)
+
+The standalone frontend route `/api-test/` ([`frontend/api-test/index.html`](frontend/api-test/index.html)) provides a dedicated Cloudscape test harness for API principals (`tcg_api_...` tokens) without altering the human chat portal (`/`) or admin portal (`/admin/`).
+
+- **Local development**: With the API gateway running on `http://127.0.0.1:8080`, start the Vite dev server on port `5176`:
+  ```bash
+  npm --prefix frontend run dev -- --host 127.0.0.1 --port 5176 --strictPort
+  ```
+  Then open `http://127.0.0.1:5176/api-test/`.
+- **Strict in-memory isolation**: Connects via `GET /api/auth/session` using `Authorization: Bearer <token>` and `credentials: 'omit'`. Rejects human sessions (`principal_type !== 'api'`), never uses `/api/auth/portal-session` cookies or token-refresh callbacks, and holds the token in React component memory only (never `localStorage`, `sessionStorage`, `IndexedDB`, cookies, URLs, logs, exports, or screenshots).
+- **Local disconnect semantics**: Clicking **Disconnect** aborts active browser streams and requests, clears principal state, and unmounts the workspace locally without calling `/api/auth/logout` or revoking the server-side API token. Stopping an active execution halts SSE consumption in the browser; server-side cancellation relies on connection teardown.
+- **Minimum useful `agent:*` permissions**:
+  - Core interactive chat: `agent:models:list`, `agent:models:invoke`, `agent:executions:create`, and (when answering clarification or deck approval prompts) `agent:executions:resume`.
+  - Optional permissions that degrade cleanly when absent or denied (`403`): `agent:usage:read`, `agent:conversations:read`, `agent:conversations:write`, `agent:conversations:delete`, `agent:executions:read`, `agent:preferences:read`, and `agent:preferences:write`.
+- **Principal ownership**: Usage counters, saved conversations, execution snapshots, and **Agent preferences** read and mutated in `/api-test/` belong to the authenticated API principal, not a human operator account.
+- **Automated test scope**: Frontend automated checks validate the `/api-test/` route using synthetic tokens and mocked SSE/API responses without invoking live billable LLM providers.

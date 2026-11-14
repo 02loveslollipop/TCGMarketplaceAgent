@@ -1,0 +1,51 @@
+.api-test-disconnected {
+  display: flex;
+  flex-direction: column;
+  min-block-size: 100dvh;
+}
+
+.api-test-disconnected .login-page {
+  flex: 1;
+  min-block-size: 0;
+}
+
+.api-test-chat-route {
+  display: flex;
+  flex-direction: column;
+  block-size: 100%;
+  min-block-size: 0;
+}
+
+.api-test-status-strip {
+  flex-shrink: 0;
+  padding: 8px 16px;
+  border-block-end: 1px solid var(--api-test-divider);
+  background: var(--api-test-surface);
+}
+
+.api-test-status-inner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px 16px;
+}
+
+.api-test-status-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px 14px;
+  min-inline-size: 0;
+}
+
+.api-test-chat-body {
+  flex: 1;
+  min-block-size: 0;
+}
+
+@media (max-width: 688px) {
+  .api-test-status-strip {
+    padding: 8px 12px;
+  }
+}

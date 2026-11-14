@@ -2,6 +2,6 @@ import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
-  build: { rollupOptions: { input: { web: 'index.html', admin: 'admin/index.html' } } },
-  server: { proxy: { '/api': 'http://127.0.0.1:8080' } }
+  build: { rollupOptions: { input: { web: 'index.html', admin: 'admin/index.html', apiTest: 'api-test/index.html' } } },
+  server: { proxy: { '/api/': 'http://127.0.0.1:8080' } }
 });
