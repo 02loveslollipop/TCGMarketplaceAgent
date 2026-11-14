@@ -35,6 +35,7 @@ const EXECUTION_STATUS_LABELS: Record<ExecutionDebugInfo['status'], { label: str
   idle: { label: 'Idle', type: 'stopped' },
   streaming: { label: 'Streaming SSE', type: 'in-progress' },
   waiting: { label: 'Waiting for decision', type: 'warning' },
+  cancelled: { label: 'Cancelled', type: 'stopped' },
   stopped_local: { label: 'Stopped in browser', type: 'stopped' },
   incomplete: { label: 'Stream ended early', type: 'warning' },
   error: { label: 'Execution failed', type: 'error' },

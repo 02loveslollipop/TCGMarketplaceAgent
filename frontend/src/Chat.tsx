@@ -21,7 +21,7 @@ import {settingsInputAttributes} from './inputSemantics';
 export interface ExecutionDebugInfo {
   conversationId?: string;
   executionId: string;
-  status: 'idle' | 'streaming' | 'waiting' | 'stopped_local' | 'incomplete' | 'error' | 'complete';
+  status: 'idle' | 'streaming' | 'waiting' | 'cancelled' | 'stopped_local' | 'incomplete' | 'error' | 'complete';
   lastEventType?: string;
 }
 
@@ -77,21 +77,22 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
   const onExecutionStateChangeRef=useRef(onExecutionStateChange);onExecutionStateChangeRef.current=onExecutionStateChange;
   const onModelsChangeRef=useRef(onModelsChange);onModelsChangeRef.current=onModelsChange;
   const log=useRef<HTMLDivElement>(null),prompt=useRef<PromptInputProps.Ref>(null),atBottom=useRef(true),previewTrigger=useRef<HTMLElement|null>(null);
-  function isStale(reqToken:string){return !alive.current||!!teardownController.current?.signal.aborted||(isApiTokenMode&&currentToken.current!==reqToken);}
+  function isStale(reqToken:string,signal?:AbortSignal){return !alive.current||!!signal?.aborted||!!teardownController.current?.signal.aborted||(isApiTokenMode&&currentToken.current!==reqToken);}
   function reportExecution(info:ExecutionDebugInfo){onExecutionStateChangeRef.current?.(info);}
   function entry(event:ChatEvent,at?:string):ChatEntry{return {...event,id:`chat-event-${++entryId.current}`,at};}
   function append(event:ChatEvent){const row=entry(event);setEvents(previous=>{if(event.type==='thinking'||event.type==='tool'){const currentTurn=previous.map(item=>item.type).lastIndexOf('user');const existing=previous.findIndex((item,index)=>index>currentTurn&&item.type===event.type&&'id' in item.data&&item.data.id===event.data.id);if(existing>=0)return previous.map((item,index)=>index===existing?{...row,id:item.id}:item);}return [...previous,row];});}
   function refreshUsage(){
     const reqToken=currentToken.current;
+    const signal=teardownController.current?.signal;
     if(!canReadUsage){
       const msg='Daily usage is unavailable because this API token lacks agent:usage:read. Server-side limits still apply.';
       setUsage(null);setUsageError(msg);onUsageChangeRef.current?.(null,msg);return;
     }
-    void api<DailyUsage>('/api/chat/usage',reqToken,{signal:teardownController.current?.signal},authOptions).then(value=>{
+    void api<DailyUsage>('/api/chat/usage',reqToken,{signal},authOptions).then(value=>{
       if(!value||!['daily_token_limit','total_tokens','remaining_tokens'].every(key=>typeof (value as unknown as Record<string,unknown>)[key]==='number'))throw new Error('Invalid usage response');
-      if(!isStale(reqToken)){setUsage(value);setUsageError('');onUsageChangeRef.current?.(value,'');}
+      if(!isStale(reqToken,signal)){setUsage(value);setUsageError('');onUsageChangeRef.current?.(value,'');}
     }).catch(err=>{
-      if(isStale(reqToken))return;
+      if(isStale(reqToken,signal))return;
       const msg=err instanceof ApiError&&err.status===403
         ?(err.message||'Daily usage access was denied for this API token (403). Limits are still checked by the server.')
         :'Daily usage is unavailable. Limits are still checked by the server.';
@@ -100,6 +101,7 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
   }
   async function refreshConversations(){
     const reqToken=currentToken.current;
+    const signal=teardownController.current?.signal;
     if(!canReadConversations){
       if(!isStale(reqToken)){
         setConversations([]);setHistoryDenied(true);setConversationsLoading(false);
@@ -108,14 +110,14 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
       return;
     }
     try{
-      const rows=await api<Conversation[]>('/api/chat/conversations',reqToken,{signal:teardownController.current?.signal},authOptions);
-      if(!isStale(reqToken)){setConversations(rows);setHistoryError('');setHistoryDenied(false);}
+      const rows=await api<Conversation[]>('/api/chat/conversations',reqToken,{signal},authOptions);
+      if(!isStale(reqToken,signal)){setConversations(rows);setHistoryError('');setHistoryDenied(false);}
     }catch(err){
-      if(isStale(reqToken))return;
+      if(isStale(reqToken,signal))return;
       if(err instanceof ApiError&&err.status===403)setHistoryDenied(true);
       setHistoryError((err as Error).message);
     }finally{
-      if(!isStale(reqToken))setConversationsLoading(false);
+      if(!isStale(reqToken,signal))setConversationsLoading(false);
     }
   }
   useEffect(()=>{
@@ -152,7 +154,10 @@ export function Chat({token,onPreview,navigationContainer,onConversationSelected
     if(event.type==='error'){setError(event.data.message);reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'error',lastEventType:'error'});}
     if(event.type==='cards')setAnnouncement(event.data.legality.applicable===false?'Collection candidates ready. Review the researched printings and sources.':'Deck preview ready. Review the resolved printings and sources.');
     if(event.type==='result'){setAnnouncement(event.data.collection_summary?'Collection and budget ready. Open the preview to review the selected printings and spending allowance.':'Deck and budget ready. Open the preview to review quotations and sources.');reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'complete',lastEventType:'result'});}
-    if(event.type==='done'&&event.data.status!=='waiting'){reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status:'complete',lastEventType:'done'});}
+    if(event.type==='done'&&event.data.status!=='waiting'){
+      const status=event.data.status==='complete'?'complete':event.data.status==='cancelled'?'cancelled':['failed','error'].includes(event.data.status)?'error':'incomplete';
+      reportExecution({executionId:tracker.executionId,conversationId:tracker.conversationId,status,lastEventType:'done'});
+    }
     append(event);
   }
   async function run(path:string,body:unknown,restoreQuestion:Question|null=null,initialExecutionId:string=execution){
