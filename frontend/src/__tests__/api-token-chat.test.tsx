@@ -1,3 +1,4 @@
+import {StrictMode} from 'react';
 import {render,screen,waitFor,within,cleanup} from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import {afterEach,beforeEach,describe,expect,it,vi} from 'vitest';
@@ -151,6 +152,44 @@ afterEach(() => {
 });
 
 describe('API token chat test client', () => {
+  it('consumes a Docker launch token once under StrictMode and clears it on disconnect', async () => {
+    const bootstrapToken=vi.fn(async()=>TOKEN_A);
+    vi.spyOn(globalThis,'fetch').mockImplementation(async input=>{
+      const url=String(input);
+      if(url==='/api/auth/session')return jsonResponse(makeApiSession());
+      if(url==='/api/chat/models')return jsonResponse([]);
+      if(url==='/api/chat/conversations')return jsonResponse([]);
+      if(url==='/api/chat/usage')return jsonResponse({daily_token_limit:5000,total_tokens:0,remaining_tokens:5000});
+      throw new Error('Unexpected request');
+    });
+    const user=userEvent.setup();
+    render(<StrictMode><ApiTokenShell bootstrapToken={bootstrapToken}/></StrictMode>);
+    expect(await screen.findByTestId('api-principal-banner')).toHaveTextContent('ci-deck-bot');
+    expect(bootstrapToken).toHaveBeenCalledTimes(1);
+    await user.click(screen.getByRole('button',{name:'Disconnect'}));
+    expect(screen.getByTestId('api-token-input')).toHaveValue('');
+    expect(bootstrapToken).toHaveBeenCalledTimes(1);
+    expect(localStorage.getItem('token')).toBeNull();
+    expect(sessionStorage.length).toBe(0);
+  });
+
+  it('keeps manual connection available when the Docker launch token has already been consumed', async () => {
+    render(<ApiTokenShell bootstrapToken={async()=>null}/>);
+    await waitFor(()=>expect(screen.getByTestId('api-token-input')).toBeEnabled());
+    expect(screen.getByTestId('api-token-input')).toHaveValue('');
+    expect(screen.queryByTestId('api-token-connect-error')).not.toBeInTheDocument();
+  });
+
+  it('prevents manual connection races during bootstrap and permits retry after bootstrap failure', async () => {
+    let rejectBootstrap!: (reason:Error)=>void;
+    const bootstrapToken=()=>new Promise<string|null>((_resolve,reject)=>{rejectBootstrap=reject;});
+    render(<ApiTokenShell bootstrapToken={bootstrapToken}/>);
+    expect(screen.getByTestId('api-token-input')).toBeDisabled();
+    rejectBootstrap(new Error('Synthetic startup failure'));
+    await waitFor(()=>expect(screen.getByTestId('api-token-input')).toBeEnabled());
+    expect(screen.getByTestId('api-token-connect-error')).toHaveTextContent('Enter an API token to connect.');
+  });
+
   it('validates blank and whitespace tokens inline with focus and enabled Connect button', async () => {
     const fetchSpy = vi.spyOn(globalThis, 'fetch');
     const user = userEvent.setup();

@@ -59,13 +59,15 @@ function pageFromHash(): ApiPage {
   return window.location.hash === '#preferences' ? 'preferences' : 'chat';
 }
 
-export function ApiTokenShell() {
+export function ApiTokenShell({bootstrapToken}: {bootstrapToken?: () => Promise<string | null>} = {}) {
   const appearance = useAppearance();
   const destinations = useMemo(() => configuredApiDestinations(), []);
 
   const [tokenInput, setTokenInput] = useState('');
   const [tokenError, setTokenError] = useState('');
   const [connecting, setConnecting] = useState(false);
+  const [bootstrapping, setBootstrapping] = useState(!!bootstrapToken);
+  const bootstrapRequest = useRef<Promise<string | null> | null>(null);
   const [connectError, setConnectError] = useState('');
   const [disconnectNotice, setDisconnectNotice] = useState('');
 
@@ -217,9 +219,26 @@ export function ApiTokenShell() {
     setExecutionDebug(info);
   }, []);
 
-  async function connect() {
+  useEffect(() => {
+    if (!bootstrapToken) return;
+    let active = true;
+    // Reuse the one-shot request during StrictMode's effect cleanup/replay.
+    bootstrapRequest.current ??= bootstrapToken();
+    void bootstrapRequest.current.then(async (raw) => {
+      if (!active) return;
+      bootstrapRequest.current = null;
+      if (raw) await connect(raw);
+    }).catch(() => {
+      if (active) setConnectError('The launch token could not be loaded. Enter an API token to connect.');
+    }).finally(() => {
+      if (active) setBootstrapping(false);
+    });
+    return () => { active = false; };
+  }, [bootstrapToken]);
+
+  async function connect(rawToken = tokenInput) {
     if (connecting) return;
-    const validation = validateApiTokenInput(tokenInput);
+    const validation = validateApiTokenInput(rawToken);
     if (!validation.valid) {
       setTokenError(validation.message);
       tokenInputRef.current?.focus();
@@ -438,6 +457,7 @@ export function ApiTokenShell() {
                     data-testid="api-token-connect-form"
                     onSubmit={(event) => {
                       event.preventDefault();
+                      if (bootstrapping) return;
                       void connect();
                     }}
                   >
@@ -447,7 +467,7 @@ export function ApiTokenShell() {
                           data-testid="api-token-connect-button"
                           variant="primary"
                           formAction="submit"
-                          loading={connecting}
+                          loading={connecting || bootstrapping}
                         >
                           Connect
                         </Button>
@@ -467,7 +487,7 @@ export function ApiTokenShell() {
                             type="password"
                             autoComplete="off"
                             value={tokenInput}
-                            disabled={connecting}
+                            disabled={connecting || bootstrapping}
                             placeholder="Enter API token"
                             nativeInputAttributes={{
                               ...settingsInputAttributes,
