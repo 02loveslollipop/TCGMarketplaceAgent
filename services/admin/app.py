@@ -44,7 +44,7 @@ def serialize_model(model):
             "enabled":model.enabled, "verified_at":model.verified_at.isoformat() if model.verified_at else None}
 
 
-def create_app(repo, current, auth_url="http://auth:8000", orchestrator_url="http://orchestrator:8000", client=None):
+def create_app(repo, current, auth_url="http://auth:8000", orchestrator_url="http://orchestrator:8000", client=None, tcg_url=""):
     app = application("Pokemon administration")
 
     async def proxy(method, url, user, body=None):
@@ -55,7 +55,9 @@ def create_app(repo, current, auth_url="http://auth:8000", orchestrator_url="htt
                 async with httpx.AsyncClient(timeout=30) as http:
                     response = await http.request(method,url,json=body,headers={"Authorization":f"Bearer {user.token}"})
             if response.status_code >= 400:
-                try:message=response.json().get("error",{}).get("message")
+                try:
+                    payload = response.json()
+                    message = payload.get("error", {}).get("message") or payload.get("detail")
                 except ValueError:message=None
                 raise HTTPException(response.status_code,message or "Service rejected the administrative operation.")
             return response.json()
@@ -66,6 +68,20 @@ def create_app(repo, current, auth_url="http://auth:8000", orchestrator_url="htt
     async def accounts(user=Depends(current)):
         require_permission(user,'admin:accounts:read')
         return await proxy("GET",f"{auth_url}/accounts",user)
+
+    @app.get("/tcg-manager/overview")
+    async def tcg_overview(user=Depends(current)):
+        require_permission(user, "admin:tcg:read")
+        if not tcg_url:
+            raise HTTPException(503, "TCG Manager is not configured.")
+        return await proxy("GET", f"{tcg_url}/v1/admin/overview", user)
+
+    @app.post("/tcg-manager/prices/refresh-next")
+    async def tcg_refresh(user=Depends(current)):
+        require_permission(user, "admin:tcg:refresh")
+        if not tcg_url:
+            raise HTTPException(503, "TCG Manager is not configured.")
+        return await proxy("POST", f"{tcg_url}/v1/admin/prices/refresh-next", user)
 
     @app.post("/accounts",status_code=201)
     async def create_account(body: AccountInput,user=Depends(current)):

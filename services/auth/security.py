@@ -43,13 +43,16 @@ class Tokens:
     def __init__(self, public_key: str, private_key: str | None = None):
         self.public_key, self.private_key = public_key, private_key
 
-    def issue(self, user: User, kind="access", challenge_id=None, *, dev_session=None, orig_iat: int | None = None) -> str:
+    def issue(self, user: User, kind="access", challenge_id=None, *, dev_session=None, orig_iat: int | None = None,
+              expires_at: int | None = None) -> str:
         now = utcnow()
         access_ttl = int(os.getenv("ACCESS_TOKEN_TTL_MINUTES", "480"))
-        payload = {"sub":user.id, "iss":"pokemon-tcg-auth", "aud":"pokemon-tcg-poc",
-                   "iat":now, "nbf":now, "exp":now + timedelta(minutes=access_ttl if kind == "access" else 5),
+        audience = "tcg-manager" if kind == "tcg_access" else "pokemon-tcg-poc"
+        ttl = access_ttl if kind == "access" else 60 if kind == "tcg_access" else 5
+        payload = {"sub":user.id, "iss":"pokemon-tcg-auth", "aud":audience,
+                   "iat":now, "nbf":now, "exp":now + timedelta(minutes=ttl),
                    "jti":str(uuid4()), "type":kind, "version":user.token_version}
-        if kind == "access":
+        if kind in {"access", "tcg_access"}:
             if orig_iat is None:
                 payload["orig_iat"] = int(now.timestamp())
             elif isinstance(orig_iat, datetime):
@@ -60,6 +63,8 @@ class Tokens:
                 hours=int(os.getenv("MAX_SESSION_HOURS", "168"))
             )
             payload["exp"] = min(payload["exp"], session_end)
+        if expires_at is not None:
+            payload["exp"] = min(payload["exp"], datetime.fromtimestamp(expires_at, timezone.utc))
         if challenge_id:
             payload["challenge_id"] = challenge_id
         if dev_session is not None:
@@ -69,11 +74,11 @@ class Tokens:
     def read(self, token: str, kind="access") -> dict:
         try:
             claims = jwt.decode(token, self.public_key, algorithms=["RS256"],
-                                issuer="pokemon-tcg-auth", audience="pokemon-tcg-poc",
+                                issuer="pokemon-tcg-auth", audience="tcg-manager" if kind == "tcg_access" else "pokemon-tcg-poc",
                                 options={"require":["sub", "exp", "iat", "nbf", "jti", "type", "version"]})
             if claims["type"] != kind:
                 raise AuthenticationError("Token has incorrect purpose.")
-            if kind == "access":
+            if kind in {"access", "tcg_access"}:
                 self._check_session_age(claims)
             return claims
         except jwt.InvalidTokenError as error:
@@ -151,7 +156,7 @@ class Security:
         user = self.repo.user(user_id=claims["sub"])
         if not user or not user.active or user.token_version != claims["version"]:
             raise AuthenticationError("Account or session is unavailable.")
-        if kind == "access":
+        if kind in {"access", "tcg_access"}:
             dev_session = claims.get("dev_session")
             if dev_session is not None:
                 if not self._local_password_only or not secrets.compare_digest(str(dev_session), self._dev_session):

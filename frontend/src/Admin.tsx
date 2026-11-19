@@ -9,10 +9,11 @@ import type {Session} from './contracts';
 import {Overview} from './Overview';
 import {Consumption} from './Consumption';
 import {AdminActivity} from './AdminActivity';
+import {TcgOperations} from './TcgOperations';
 import type {Model} from './contracts';
 
 interface Account {id:string;username:string;role:string;active:boolean;iam_role_id?:string|null;role_name?:string}
-export type AdminSection='overview'|'accounts'|'models'|'roles'|'principals'|'activity'|'consumption';
+export type AdminSection='overview'|'accounts'|'models'|'roles'|'principals'|'activity'|'consumption'|'tcg-manager';
 const suggestions=[{label:'GPT 6 luna',value:'gpt-6-luna',provider:'openai'}, {label:'GPT 6.1 terra',value:'gpt-6.1-terra',provider:'openai'}, {label:'Mistral Medium',value:'mistral-medium-latest',provider:'mistral'}];
 const newModel=():Model=>({id:'',label:'',provider:'openai',api_id:'',enabled:false});
 const providerName=(provider:string)=>provider==='openai'?'OpenAI':'Mistral';
@@ -69,7 +70,7 @@ export function Admin({token,section='models',onNavigate,onSessionChange,session
   const editorTrigger=useRef<HTMLElement|null>(null);
   useEffect(()=>{if(!editing&&!creatingAccount&&!roleAccount)editorTrigger.current?.focus();},[editing,creatingAccount,roleAccount]);
   async function refresh(){if(section==='accounts')setAccounts(await api<Account[]>('/api/admin/accounts',token));else setModels(await api<Model[]>('/api/admin/models',token));}
-  useEffect(()=>{if(section==='overview'||section==='roles'||section==='principals'||section==='activity'||section==='consumption')return;setError('');setLoading(true);void refresh().catch(error=>setError(error.message)).finally(()=>setLoading(false));},[token,section]);
+  useEffect(()=>{if(section!=='accounts'&&section!=='models')return;setError('');setLoading(true);void refresh().catch(error=>setError(error.message)).finally(()=>setLoading(false));},[token,section]);
   useEffect(()=>{setFilter('');setPage(1);},[section]);
   // A successful mutation stays successful if the subsequent list refresh fails.
   async function reload(){try{await refresh();}catch{setError('Your change was saved, but the list could not be refreshed. Refresh the page to see the latest data.');}}
@@ -81,7 +82,7 @@ export function Admin({token,section='models',onNavigate,onSessionChange,session
   const tableFilter=<TextFilter filteringText={filter} filteringPlaceholder={section==='accounts'?'Find accounts':'Find models'} filteringAriaLabel={section==='accounts'?'Find accounts':'Find models'} onChange={({detail})=>{setFilter(detail.filteringText);setPage(1);}} countText={`${rows.length} ${rows.length===1?'match':'matches'}`}/>;
   const pagination=<Pagination currentPageIndex={currentPage} pagesCount={Math.max(1,Math.ceil(rows.length/10))} onChange={({detail})=>setPage(detail.currentPageIndex)} ariaLabels={{nextPageLabel:'Next page',previousPageLabel:'Previous page',pageLabel:page=>`Page ${page}`}}/>;
   return <SpaceBetween size="l">
-    <div hidden={section==='roles'||section==='principals'||section==='activity'||section==='consumption'}><SpaceBetween size="l">
+    <div hidden={section!=='overview'&&section!=='accounts'&&section!=='models'}><SpaceBetween size="l">
     {section!=='overview'&&<Header variant="h1" description={section==='accounts'?'Manage who can use this private workspace.':'Control which models appear in chat and the provider identifiers they use.'} actions={permits(session,section==='accounts'?'admin:accounts:write':'admin:models:write')?<Button variant="primary" onClick={()=>{editorTrigger.current=document.activeElement as HTMLElement;setNotice('');if(section==='accounts')setCreatingAccount(true);else{setCreatingModel(true);setEditing(newModel());}}}>{section==='accounts'?'Create account':'Create model policy'}</Button>:undefined}>{section==='accounts'?'Accounts':'Model policies'}</Header>}
     {section!=='overview'&&error&&<Alert type="error" dismissible onDismiss={()=>setError('')}>{error}</Alert>}
     <Flashbar items={notice?[{id:'admin-success',type:'success',content:notice,dismissible:true,dismissLabel:'Dismiss notification',onDismiss:()=>setNotice('')}]:[]}/>
@@ -100,6 +101,7 @@ export function Admin({token,section='models',onNavigate,onSessionChange,session
     </>}
     </SpaceBetween></div>
     {section==='consumption'&&<Consumption token={token} session={session}/>}
+    {section==='tcg-manager'&&<TcgOperations token={token}/>}
     {(section==='roles'||section==='principals')&&<IAMAccess token={token} mode={section==='roles'?'roles':'principals'} session={session}/>}
     <div hidden={section!=='activity'}>{section==='activity'&&<AdminActivity token={token} session={session}/>}</div>
     {roleAccount&&<Modal visible header={`Change role for ${roleAccount.username}`} closeAriaLabel="Close role editor" onDismiss={()=>{if(!roleBusy)setRoleAccount(null);}} footer={<Box float="right"><SpaceBetween direction="horizontal" size="xs"><Button variant="link" disabled={roleBusy} onClick={()=>setRoleAccount(null)}>Cancel</Button><Button variant="primary" loading={roleBusy} disabled={newRole===(roleAccount.iam_role_id||roleAccount.role)} onClick={()=>{if(roleBusy)return;setRoleBusy(true);setRoleError('');void api<Account&{sign_in_again:boolean}>((iamRoles.length?`/api/admin/iam/accounts/${roleAccount.id}/role`:`/api/admin/accounts/${roleAccount.id}/role`),token,{method:'PUT',body:JSON.stringify(iamRoles.length?{role_id:newRole}:{role:newRole})}).then(async result=>{setRoleAccount(null);if(result.sign_in_again){onSessionChange?.();return;}setNotice(`${result.username} role changed to ${result.role_name||(result.role==='admin'?'Administrator':'User')}. Existing sessions revoked.`);await reload();}).catch(error=>setRoleError(error.message)).finally(()=>setRoleBusy(false));}}>Save role</Button></SpaceBetween></Box>}><SpaceBetween size="l"><FormField label="Account role"><Select selectedOption={{value:newRole,label:iamRoles.find(role=>role.id===newRole)?.name||(newRole==='admin'?'Administrator':'User')}} options={iamRoles.length?iamRoles.map(role=>({value:role.id,label:role.name,disabled:!permits(session,'iam:roles:assign','role:'+role.id)})):[{value:'user',label:'User'},{value:'admin',label:'Administrator'}]} onChange={({detail})=>setNewRole(detail.selectedOption.value!)} disabled={roleBusy}/></FormField><Alert type="info">Changing a role revokes the account's existing sessions. At least one human account must retain IAM role-management access.</Alert>{roleError&&<Alert type="error">{roleError}</Alert>}</SpaceBetween></Modal>}

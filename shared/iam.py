@@ -28,6 +28,8 @@ ACTIONS={
  'admin:usage:read':'Inspect principal and historical role consumption',
  'admin:legality:read':'Read legality sync status',
  'admin:legality:refresh':'Refresh the legality catalog',
+ 'admin:tcg:read':'Read TCG Manager operations',
+ 'admin:tcg:refresh':'Refresh TCG Manager market references',
  'iam:roles:read':'Read IAM roles and policies',
  'iam:roles:write':'Create and manage IAM roles and policies',
  'iam:roles:assign':'Assign a role to a human account or API principal',

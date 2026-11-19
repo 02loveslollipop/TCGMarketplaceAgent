@@ -204,6 +204,8 @@ def create_app(repo, security, webauthn=None):
 
     from services.auth.portal_session import install_portal_sessions
     install_portal_sessions(app,security,serialize_session,current)
+    from services.auth.tcg_oauth import install_tcg_oauth
+    install_tcg_oauth(app, security, serialize_session, guard, iam.human)
 
     @app.post("/logout")
     def logout(request:Request,response:Response,user=Depends(current)):
