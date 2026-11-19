@@ -17,6 +17,7 @@ export function TcgAuthorization({request, token, username}: {
 }) {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [nativeCallback, setNativeCallback] = useState('');
 
   async function continueToTcg() {
     setLoading(true);
@@ -26,7 +27,13 @@ export function TcgAuthorization({request, token, username}: {
         method: 'POST',
         body: JSON.stringify(request),
       });
-      window.location.replace(result.redirect_uri);
+      if (/^https?:\/\//.test(result.redirect_uri)) {
+        window.location.replace(result.redirect_uri);
+      } else {
+        // Mobile browsers require a direct user gesture to open the app's URL scheme.
+        setNativeCallback(result.redirect_uri);
+        setLoading(false);
+      }
     } catch {
       setError('Could not authorize this request. Open TCG Manager and start sign-in again.');
       setLoading(false);
@@ -38,7 +45,9 @@ export function TcgAuthorization({request, token, username}: {
       <SpaceBetween size="m">
         {error && <Alert type="error">{error}</Alert>}
         <div>Continue with your shared account, {username}.</div>
-        <Button variant="primary" loading={loading} onClick={() => void continueToTcg()}>Continue</Button>
+        {nativeCallback
+          ? <Button variant="primary" href={nativeCallback}>Open TCG Manager</Button>
+          : <Button variant="primary" loading={loading} onClick={() => void continueToTcg()}>Continue</Button>}
       </SpaceBetween>
     </Container>
   </ContentLayout>;

@@ -1,4 +1,5 @@
 import json
+import httpx
 import pytest
 from fastapi import Depends, HTTPException
 from fastapi.testclient import TestClient
@@ -94,6 +95,28 @@ def test_admin_models_authorization_and_unverified_model(repo):
     response = client.put("/models/test",headers=headers("admin"),json={"label":"Test","provider":"openai","api_id":"fixture","enabled":False})
     assert response.status_code==200 and not response.json()["enabled"]
     assert client.get("/models",headers=headers("admin")).json()[0]["api_id"]=="fixture"
+
+
+def test_shared_admin_proxies_only_authorized_collection_operations(repo):
+    called = []
+
+    def collection(request):
+        called.append((request.method, request.url.path))
+        assert request.headers["Authorization"] == "Bearer admin"
+        if request.url.path == "/v1/admin/overview":
+            return httpx.Response(200, json={"catalog_printings": 2, "can_refresh": True})
+        return httpx.Response(200, json={"status": "up_to_date"})
+
+    proxy = httpx.AsyncClient(transport=httpx.MockTransport(collection))
+    browser = TestClient(admin_app(repo, current, client=proxy, tcg_url="https://fixture.invalid"))
+    overview = "/tcg-manager/overview"
+    refresh = "/tcg-manager/prices/refresh-next"
+    assert browser.get(overview, headers=headers()).status_code == 403
+    assert browser.post(refresh, headers=headers()).status_code == 403
+    assert called == []
+    assert browser.get(overview, headers=headers("admin")).json()["catalog_printings"] == 2
+    assert browser.post(refresh, headers=headers("admin")).json()["status"] == "up_to_date"
+    assert called == [("GET", "/v1/admin/overview"), ("POST", "/v1/admin/prices/refresh-next")]
 
 
 async def test_model_disable_between_tool_rounds_prevents_next_invocation(repo):
