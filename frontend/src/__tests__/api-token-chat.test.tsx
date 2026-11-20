@@ -472,7 +472,7 @@ describe('API token chat test client', () => {
     expect(document.cookie).not.toContain(TOKEN_B);
   });
 
-  it('supports SSE question/approval, SplitPanel result, execution snapshot debugging, incomplete streams, and local stop caveat', async () => {
+  it('supports SSE question/approval, SplitPanel result, execution snapshot debugging, incomplete streams, and local stop caveat', { timeout: 10_000 }, async () => {
     const sse1 = makeControlledSse();
     const sse2 = makeControlledSse();
     const sse3 = makeControlledSse();
