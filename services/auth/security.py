@@ -222,7 +222,7 @@ class Security:
                 if state is None:
                     state=EnrollmentState(enrollment_id=parent.id);session.add(state)
                 state.totp_secret=self.cipher.encrypt(secret.encode()).decode()
-                return {"secret":secret,"uri":pyotp.TOTP(secret).provisioning_uri(user.username,issuer_name="Pokemon TCG PoC")}
+                return {"secret":secret,"uri":pyotp.TOTP(secret).provisioning_uri(name=user.username,issuer_name="Pokemon TCG PoC")}
             if not state or not state.totp_secret:
                 raise AuthenticationError("Start authenticator enrollment first.")
             parent.attempts+=1
@@ -308,7 +308,7 @@ class Security:
             raise ValueError("Authenticator is already enrolled.")
         secret = pyotp.random_base32()
         self.repo.update_user(user.id, totp_pending=self.cipher.encrypt(secret.encode()).decode())
-        return {"secret":secret, "uri":pyotp.TOTP(secret).provisioning_uri(user.username, issuer_name="Pokemon TCG PoC")}
+        return {"secret":secret, "uri":pyotp.TOTP(secret).provisioning_uri(name=user.username, issuer_name="Pokemon TCG PoC")}
 
     def confirm_totp(self, user: User, code: str):
         if not user.totp_pending:

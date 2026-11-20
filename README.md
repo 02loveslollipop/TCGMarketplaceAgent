@@ -1,5 +1,7 @@
 # Pokémon TCG Marketplace Agent
 
+For the optional shared sign-in and administration integration, see [TCG Manager integration](docs/tcg-manager-integration.md).
+
 A purchasing and deck-building assistant built with **LangGraph**, **LangChain**, and the **Cloudscape Design System**. The system accepts natural language requests for Pokémon Trading Card Game singles and tournament decks, validates card identities and dated format legality, compares baseline price guides and, when enabled, seller quotations from TCGplayer and Cardmarket, and produces verifiable purchasing budgets with multi-currency conversion.
 
 ## Notice
